@@ -1,0 +1,8 @@
+services:
+  securedrop:
+    build: .
+    network_mode: host
+    volumes:
+      - ./securedrop/storage:/app/securedrop/storage
+    environment:
+      - SECUREDROP_DEVICE_NAME=SecureDrop-Docker

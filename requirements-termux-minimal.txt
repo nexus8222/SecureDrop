@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+qrcode[pil]>=7.4
+requests>=2.31
+# Install cryptography via Termux package manager instead:
+# pkg install python-cryptography

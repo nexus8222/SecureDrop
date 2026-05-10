@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#060816" />
+  <title>SecureDrop LAN v2</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">SD</div>
+        <div>
+          <h1>SecureDrop LAN</h1>
+          <p>Private encrypted sharing</p>
+        </div>
+      </div>
+
+      <nav class="nav-stack" aria-label="Primary navigation">
+        <button class="nav active" data-tab="send"><span>⬆</span><b>Send</b></button>
+        <button class="nav" data-tab="receive"><span>⬇</span><b>Receive</b></button>
+        <button class="nav admin-only" data-tab="peers"><span>◌</span><b>LAN Peers</b></button>
+        <button class="nav admin-only" data-tab="queue"><span>▣</span><b>Queue</b></button>
+        <button class="nav admin-only" data-tab="approvals"><span>✓</span><b>Approvals</b></button>
+        <button class="nav admin-only" data-tab="history"><span>◷</span><b>History</b></button>
+        <button class="nav admin-only" data-tab="vault"><span>▣</span><b>Storage</b></button>
+        <button class="nav admin-only" data-tab="settings"><span>Settings</span><b>Settings</b></button>
+      </nav>
+
+      <div class="node-card">
+        <div class="node-status-line">
+          <span class="pulse-dot"></span>
+          <span class="small-label">Active node</span>
+        </div>
+        <div id="nodeName" class="node-name">Loading…</div>
+        <div id="nodeUrls" class="tiny muted stack-lines"></div>
+        <div id="clientIp" class="tiny muted client-line"></div>
+      </div>
+
+      <div class="sidebar-hint">
+        <div class="hint-icon">Lock</div>
+        <div>
+          <b>Zero plaintext storage</b>
+          <p>Chunks remain encrypted and verified before download.</p>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow"><span class="pulse-dot"></span> LAN transfer cockpit</div>
+          <h2 id="pageTitle">Send Files</h2>
+          <p id="pageSubtitle">Chunked, encrypted, resumable local file sharing.</p>
+        </div>
+        <div class="top-actions">
+          <span id="roleBadge" class="badge orange">Guest sandbox</span>
+          <button id="adminLoginBtn" class="ghost">Admin login</button>
+          <button id="adminLogoutBtn" class="ghost hidden">Logout admin</button>
+          <button id="notifyBtn" class="ghost">Enable notifications</button>
+          <button id="installBtn" class="ghost hidden">Install PWA</button>
+        </div>
+      </header>
+
+      <section class="hero-strip">
+        <div class="hero-card">
+          <span>Secure</span>
+          <div><b>AES-GCM</b><p>Browser-side encryption</p></div>
+        </div>
+        <div class="hero-card">
+          <span>Chunks</span>
+          <div><b>Chunked</b><p>20GB+ friendly flow</p></div>
+        </div>
+        <div class="hero-card">
+          <span>Fast</span>
+          <div><b>LAN optimized</b><p>Fast local transfers</p></div>
+        </div>
+        <div class="hero-card">
+          <span>Mobile</span>
+          <div><b>Phone ready</b><p>Browser receive mode</p></div>
+        </div>
+      </section>
+
+      <section id="tab-send" class="tab active">
+        <div class="grid two">
+          <div class="panel primary-panel">
+            <div class="panel-head">
+              <div>
+                <span class="section-kicker">Create</span>
+                <h3>Create encrypted share</h3>
+              </div>
+              <span class="badge">Browser AES-GCM</span>
+            </div>
+
+            <label>Share title</label>
+            <input id="shareTitle" placeholder="Movie, project folder, photos..." />
+
+            <div class="row gap responsive-row">
+              <div class="grow">
+                <label>Expires after</label>
+                <select id="expiresSelect">
+                  <option value="">Never</option>
+                  <option value="600">10 minutes</option>
+                  <option value="3600">1 hour</option>
+                  <option value="86400">1 day</option>
+                  <option value="604800">7 days</option>
+                </select>
+              </div>
+              <div class="grow">
+                <label>Max downloads</label>
+                <input id="maxDownloads" type="number" min="0" value="0" />
+              </div>
+            </div>
+
+            <div class="option-grid">
+              <label class="check option-card"><input id="deleteAfter" type="checkbox" /> <span><b>Delete after first download</b><small>Auto-clean when completed</small></span></label>
+              <label class="check option-card"><input id="requireApproval" type="checkbox" /> <span><b>Require approval</b><small>Ask before receiver downloads</small></span></label>
+            </div>
+
+            <label>Password protection</label>
+            <input id="sharePassword" type="password" placeholder="Optional access password" />
+
+            <div class="drop" id="dropZone">
+              <div class="drop-icon">⇪</div>
+              <h3>Drag files or folders here</h3>
+              <p>Encrypted before upload. Large files are split into resumable chunks.</p>
+              <div class="row center gap wrap-row">
+                <button id="pickFiles" class="primary">Choose files</button>
+                <button id="pickFolder" class="ghost">Choose folder</button>
+              </div>
+              <input id="fileInput" type="file" multiple hidden />
+              <input id="folderInput" type="file" webkitdirectory multiple hidden />
+            </div>
+
+            <div id="selectedFiles" class="file-list"></div>
+            <div class="row gap action-row">
+              <button id="createShareBtn" class="primary big">Create & Upload</button>
+              <button id="clearFilesBtn" class="ghost">Clear</button>
+            </div>
+          </div>
+
+          <div class="panel output-panel">
+            <div class="panel-head">
+              <div>
+                <span class="section-kicker">Output</span>
+                <h3>Share link & QR</h3>
+              </div>
+              <span class="badge green">Ready for phone</span>
+            </div>
+            <div id="shareOutput" class="empty-state fancy-empty">
+              <div class="empty-icon">Link</div>
+              <b>Your encrypted link will appear here</b>
+              <p>Share URL, QR code, token, and download details are generated after upload.</p>
+            </div>
+            <div class="integrity-box">
+              <div class="panel-mini-head">
+                <h4>Integrity dashboard</h4>
+                <span class="mini-pill">SHA256</span>
+              </div>
+              <div id="integrityDash" class="tiny muted">No active share yet.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-receive" class="tab">
+        <div class="grid two">
+          <div class="panel primary-panel">
+            <div class="panel-head">
+              <div>
+                <span class="section-kicker">Receive</span>
+                <h3>Browser-only receive</h3>
+              </div>
+              <span class="badge">No Termux needed</span>
+            </div>
+            <p class="muted intro-text">Paste a SecureDrop link and decrypt/save directly from your browser. Chrome/Edge works best for very large files.</p>
+            <label>Paste share link</label>
+            <textarea id="receiveLink" rows="3" placeholder="http://sender-ip:8000/share/TOKEN#key=..."></textarea>
+            <div class="row gap action-row">
+              <button id="loadShareBtn" class="primary">Load share</button>
+              <button id="pasteLinkBtn" class="ghost">Paste</button>
+            </div>
+            <div id="receiveLocked" class="hidden lock-box">
+              <div class="lock-title">Access Access required</div>
+              <label>Password / approval</label>
+              <input id="receivePassword" type="password" placeholder="Password if required" />
+              <button id="unlockShareBtn" class="primary">Request access</button>
+              <div id="approvalStatus" class="tiny muted"></div>
+            </div>
+            <div id="shareDetails" class="share-details"></div>
+          </div>
+
+          <div class="panel admin-only">
+            <div class="panel-head">
+              <div>
+                <span class="section-kicker">Background</span>
+                <h3>Server-side pull</h3>
+              </div>
+              <span class="badge orange">Python node</span>
+            </div>
+            <p class="muted intro-text">Use when both devices run SecureDrop. Receiver backend pulls chunks even if the browser tab disconnects.</p>
+            <label>Sender base URL</label>
+            <input id="pullBaseUrl" placeholder="http://192.168.1.10:8000" />
+            <label>Token</label>
+            <input id="pullToken" placeholder="Share token" />
+            <label>Key</label>
+            <input id="pullKey" placeholder="Share key from URL fragment" />
+            <label>Password</label>
+            <input id="pullPassword" type="password" placeholder="Optional" />
+            <button id="startPullBtn" class="primary big">Start background pull</button>
+            <div id="pullStatus" class="tiny muted status-line"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-peers" class="tab">
+        <div class="panel full-panel">
+          <div class="panel-head">
+            <div>
+              <span class="section-kicker">Network</span>
+              <h3>LAN peers</h3>
+            </div>
+            <button id="probeBtn" class="ghost">Probe / Refresh</button>
+          </div>
+          <p class="muted intro-text">Only devices running SecureDrop backend are listed here. Browser-only phones will not show as peers.</p>
+          <div id="peersList" class="cards"></div>
+        </div>
+      </section>
+
+      <section id="tab-queue" class="tab">
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head"><div><span class="section-kicker">Live</span><h3>Browser queue</h3></div><span class="badge">Uploads/downloads</span></div>
+            <div class="row gap action-row"><button id="clearLocalQueueBtn" class="ghost">Clear browser queue</button></div>
+            <div id="queueList" class="queue-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div><span class="section-kicker">Node</span><h3>Backend jobs</h3></div><span class="badge orange">Pulls</span></div>
+            <div class="row gap action-row"><button id="refreshJobsBtn" class="ghost">Refresh jobs</button><button id="clearJobsBtn" class="ghost danger">Clear jobs</button></div>
+            <div id="jobsList" class="queue-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-approvals" class="tab">
+        <div class="panel full-panel">
+          <div class="panel-head"><div><span class="section-kicker">Security</span><h3>Incoming approval requests</h3></div><span class="badge red">Approval mode</span></div>
+          <label class="check option-card compact-toggle"><input id="approvalHistoryToggle" type="checkbox" /> <span><b>Show request history</b><small>Accepted/rejected requests are hidden by default.</small></span></label>
+          <div id="approvalList" class="cards"></div>
+        </div>
+      </section>
+
+      <section id="tab-history" class="tab">
+        <div class="panel full-panel">
+          <div class="panel-head"><div><span class="section-kicker">Audit</span><h3>Transfer history</h3></div><span class="badge">SQLite</span></div>
+          <div id="historyList" class="table-like"></div>
+        </div>
+      </section>
+
+      <section id="tab-vault" class="tab">
+        <div class="panel full-panel">
+          <div class="panel-head">
+            <div><span class="section-kicker">Storage</span><h3>Server stored data</h3></div>
+            <div class="download-actions"><button id="refreshStorageBtn" class="ghost">Refresh</button><button id="deleteAllStorageBtn" class="ghost danger">Delete all stored data</button></div>
+          </div>
+          <p class="muted intro-text">Admin-only view of encrypted chunks, shares, QR cache, and stored metadata on this node. You can delete a single share or clean everything at once.</p>
+          <div id="storageSummary" class="cards"></div>
+          <div id="vaultStatus" class="cards"></div>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="tab">
+        <div class="grid two">
+          <div class="panel">
+            <div class="panel-head"><div><span class="section-kicker">Identity</span><h3>Device identity</h3></div><span class="badge">Trust</span></div>
+            <label>Device name</label>
+            <input id="deviceNameInput" />
+            <button id="saveNameBtn" class="primary big">Save name</button>
+            <pre id="deviceInfo" class="codebox"></pre>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><div><span class="section-kicker">Clipboard</span><h3>Clipboard sharing</h3></div><span class="badge green">Text</span></div>
+            <textarea id="clipboardText" rows="5" placeholder="Paste text/link/code to share"></textarea>
+            <button id="shareClipboardBtn" class="primary big">Create clipboard share</button>
+            <div id="clipboardOutput" class="tiny muted status-line"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="authModal" class="modal hidden">
+    <div class="modal-card auth-card">
+      <div class="panel-head"><div><span class="section-kicker">Admin</span><h3 id="authTitle">Admin login</h3></div><button id="closeAuthModal" class="ghost">Close</button></div>
+      <p id="authHelp" class="muted intro-text">Guests can only send and receive. Admin unlocks approvals, peers, queue, storage, history and settings.</p>
+      <label>Admin password</label>
+      <input id="adminPasswordInput" type="password" placeholder="Enter admin password" />
+      <button id="adminSubmitBtn" class="primary big">Continue</button>
+      <div id="authStatusText" class="tiny muted status-line"></div>
+    </div>
+  </div>
+  <div id="previewModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="panel-head"><h3 id="previewTitle">Preview</h3><button id="closePreview" class="ghost">Close</button></div>
+      <div id="previewBody" class="preview-body"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

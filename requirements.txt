@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+cryptography>=42.0
+qrcode[pil]>=7.4
+requests>=2.31

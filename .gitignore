@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Runtime storage
+securedrop/storage/
+storage/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# Logs and local files
+*.log
+*.tmp
+*.bak
+.env
+.env.*
+!.env.example
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build/archive output
+*.zip
+*.tar
+*.tar.gz
+build/
+dist/
