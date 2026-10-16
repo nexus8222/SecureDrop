@@ -27,6 +27,8 @@ storage/
 *.log
 *.tmp
 *.bak
+mind.md
+scratch/
 .env
 .env.*
 !.env.example
