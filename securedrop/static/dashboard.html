@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Dashboard — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <nav class="top-nav"></nav>
+
+  <main class="page-wrapper">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Admin Cockpit</h1>
+        <p class="page-subtitle">Hardware telemetry, access authorizations, storage lifecycle, and audit logs.</p>
+      </div>
+      <div id="authStatusBadge" class="badge badge-amber">Admin Verification Required</div>
+    </div>
+
+    <!-- Admin Login Gate -->
+    <div id="loginGate" class="panel hidden" style="text-align:center; padding:3rem 1.5rem;">
+      <div style="font-size:32px; margin-bottom:0.75rem;">🔒</div>
+      <h3 style="font-size:16px; margin-bottom:0.5rem;">Administrator Authentication Required</h3>
+      <p style="color:var(--text-muted); font-size:13px; max-width:440px; margin:0 auto 1.5rem;">
+        Approvals, server storage management, background pull jobs, and device settings are restricted to the node administrator.
+      </p>
+      <button id="gateLoginBtn" class="btn btn-primary btn-lg">Open Admin Login</button>
+    </div>
+
+    <!-- Authenticated Cockpit Content -->
+    <div id="cockpitContent" class="hidden">
+      <!-- Telemetry Cards Grid -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:1rem; margin-bottom:1.5rem;">
+        <div class="panel" style="padding:1rem;">
+          <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-family:var(--font-mono);">Encrypted Chunks</div>
+          <div id="statChunkBytes" class="mono" style="font-size:22px; font-weight:700; color:var(--accent-cyan); margin:0.25rem 0;">0 B</div>
+          <div id="statShareCount" style="font-size:12px; color:var(--text-dim);">0 Active Shares</div>
+        </div>
+        <div class="panel" style="padding:1rem;">
+          <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-family:var(--font-mono);">Node Identity</div>
+          <div id="statNodeName" class="mono" style="font-size:18px; font-weight:700; color:var(--text-main); margin:0.25rem 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">--</div>
+          <div id="statNodeFingerprint" class="mono" style="font-size:11px; color:var(--text-dim);">Fingerprint: --</div>
+        </div>
+        <div class="panel" style="padding:1rem;">
+          <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-family:var(--font-mono);">LAN Endpoints</div>
+          <div id="statEndpoints" class="mono" style="font-size:12px; color:var(--accent-emerald); margin-top:0.25rem; line-height:1.4;">--</div>
+        </div>
+      </div>
+
+      <!-- Live Incoming Approvals -->
+      <section class="panel" style="margin-bottom:1.5rem;">
+        <div class="panel-header">
+          <span class="panel-title">Incoming Receiver Access Approvals</span>
+          <label style="display:flex; align-items:center; gap:0.4rem; font-size:11px; text-transform:none; margin:0; cursor:pointer;">
+            <input id="historyToggle" type="checkbox" style="width:auto;" />
+            <span>Show Decided History</span>
+          </label>
+        </div>
+        <div id="approvalList" style="display:flex; flex-direction:column; gap:0.75rem;">
+          <div class="mono" style="color:var(--text-dim); text-align:center; padding:1.5rem;">
+            No pending approval requests.
+          </div>
+        </div>
+      </section>
+
+      <!-- Storage Management -->
+      <section class="panel" style="margin-bottom:1.5rem;">
+        <div class="panel-header">
+          <span class="panel-title">Server Storage & Shares</span>
+          <div style="display:flex; gap:0.5rem;">
+            <button id="refreshStorageBtn" class="btn btn-sm">Refresh</button>
+            <button id="purgeAllBtn" class="btn btn-sm btn-danger">Purge All Server Storage</button>
+          </div>
+        </div>
+
+        <div style="overflow-x:auto;">
+          <table class="file-table">
+            <thead>
+              <tr>
+                <th>Title / Token</th>
+                <th>Status</th>
+                <th>Files</th>
+                <th>Original Size</th>
+                <th>Stored Size</th>
+                <th>Created</th>
+                <th style="text-align:right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="storageTableBody">
+              <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:1.5rem;">Loading shares...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- User & RBAC Management -->
+      <section class="panel" style="margin-bottom:1.5rem;">
+        <div class="panel-header">
+          <span class="panel-title">User Accounts & Role-Based Access Control (RBAC)</span>
+          <button id="addUserBtn" class="btn btn-sm btn-primary">+ Create User</button>
+        </div>
+        <p style="color:var(--text-muted); font-size:12px; margin-bottom:1rem;">
+          Assign permissions, isolate user shares, or revoke node access. Internal host identity is masked from non-admin accounts.
+        </p>
+
+        <div style="overflow-x:auto;">
+          <table class="file-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Display Name</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Active Shares</th>
+                <th>Created</th>
+                <th style="text-align:right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="userTableBody">
+              <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:1.5rem;">Loading accounts...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div class="grid-two">
+        <!-- Background Pull Terminal -->
+        <section class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Background Node Pull</span>
+            <span class="badge badge-amber">Server-to-Server</span>
+          </div>
+          <p style="color:var(--text-muted); font-size:12px;">
+            Pull encrypted files from another SecureDrop node directly on disk. Resumes automatically if connection interrupts.
+          </p>
+
+          <div class="form-group">
+            <label>Sender Node URL</label>
+            <input id="pullBaseUrl" placeholder="http://192.168.1.50:8000" class="mono" />
+          </div>
+          <div class="form-group">
+            <label>Share Token</label>
+            <input id="pullToken" placeholder="Share token" class="mono" />
+          </div>
+          <div class="form-group">
+            <label>Share Key (#key= fragment)</label>
+            <input id="pullKey" placeholder="Decryption key from URL fragment" class="mono" />
+          </div>
+          <div class="form-group">
+            <label>Access Password (If required)</label>
+            <input id="pullPassword" type="password" placeholder="Optional" />
+          </div>
+          <button id="startPullBtn" class="btn btn-primary">Start Background Pull</button>
+
+          <!-- Active Jobs List -->
+          <div id="jobsList" style="margin-top:1rem; display:flex; flex-direction:column; gap:0.75rem;"></div>
+        </section>
+
+        <!-- Audit History -->
+        <section class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Transfer Audit Log</span>
+            <button id="refreshHistoryBtn" class="btn btn-sm">Refresh</button>
+          </div>
+          <div id="historyList" style="max-height:360px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem;">
+            <div class="mono" style="color:var(--text-dim); text-align:center; padding:1.5rem;">Loading audit records...</div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
