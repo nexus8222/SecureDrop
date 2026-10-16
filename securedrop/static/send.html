@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Send Files — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <nav class="top-nav"></nav>
+
+  <main class="page-wrapper">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Send Files</h1>
+        <p class="page-subtitle">Hardware-accelerated, chunked LAN file transmission.</p>
+      </div>
+      <div id="cryptoBadge" class="badge badge-emerald">Checking Cryptography...</div>
+    </div>
+
+    <div class="grid-two">
+      <!-- Input Panel -->
+      <section class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Payload Selection</span>
+          <span id="fileCountBadge" class="badge">0 Files</span>
+        </div>
+
+        <div class="dropzone" id="dropzone">
+          <div class="dropzone-icon">⇪</div>
+          <div style="font-weight: 600;">Drag and drop files or folders here</div>
+          <div class="dropzone-hint">Preserves folder directory structures. Chunks are verified via SHA-256.</div>
+          <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
+            <button id="pickFilesBtn" class="btn btn-sm btn-primary">Select Files</button>
+            <button id="pickFolderBtn" class="btn btn-sm">Select Folder</button>
+          </div>
+          <input id="fileInput" type="file" multiple class="hidden" />
+          <input id="folderInput" type="file" webkitdirectory multiple class="hidden" />
+        </div>
+
+        <!-- Selected Files List -->
+        <div id="fileTableWrapper" class="hidden" style="max-height: 220px; overflow-y: auto;">
+          <table class="file-table">
+            <thead>
+              <tr>
+                <th>Path</th>
+                <th>Size</th>
+                <th>Chunks</th>
+                <th style="text-align:right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="fileTableBody"></tbody>
+          </table>
+        </div>
+
+        <!-- Share Configuration Options -->
+        <div class="panel" style="background:var(--bg-void); padding:1rem; gap:0.75rem;">
+          <div class="panel-header" style="margin-bottom:0;">
+            <span class="panel-title" style="font-size:11px;">Transmission Policy</span>
+          </div>
+
+          <div class="form-group">
+            <label>Share Title</label>
+            <input id="shareTitle" placeholder="e.g. Project Archive, 4K Footage" />
+          </div>
+
+          <div class="input-row">
+            <div class="form-group" style="flex:1;">
+              <label>Expires After</label>
+              <select id="expiresSelect">
+                <option value="">Never</option>
+                <option value="600">10 Minutes</option>
+                <option value="3600" selected>1 Hour</option>
+                <option value="86400">1 Day</option>
+                <option value="604800">7 Days</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex:1;">
+              <label>Max Downloads</label>
+              <input id="maxDownloads" type="number" min="0" value="0" placeholder="0 = Unlimited" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Access Password (Optional)</label>
+            <input id="sharePassword" type="password" placeholder="Require password to download" />
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.75rem;">
+            <label style="display:flex; align-items:center; gap:0.5rem; text-transform:none; font-size:12px; cursor:pointer;">
+              <input id="requireApproval" type="checkbox" style="width:auto;" />
+              <span>Require Admin Approval</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:0.5rem; text-transform:none; font-size:12px; cursor:pointer;">
+              <input id="deleteAfter" type="checkbox" style="width:auto;" />
+              <span>Self-Destruct on Download</span>
+            </label>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:0.75rem; margin-top:0.25rem;">
+          <button id="uploadBtn" class="btn btn-primary btn-lg" style="flex:1;">Transmit Payload</button>
+          <button id="clearBtn" class="btn">Clear</button>
+        </div>
+      </section>
+
+      <!-- Telemetry & Output Panel -->
+      <section class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Transfer Telemetry & Radar</span>
+          <span id="telemetryStatus" class="badge">Standby</span>
+        </div>
+
+        <!-- Telemetry Meter -->
+        <div class="meter-box">
+          <div class="meter-header">
+            <span id="meterFilename">No active transmission</span>
+            <span id="meterEta">ETA: --</span>
+          </div>
+          <div class="meter-progress">
+            <div id="meterFill" class="meter-fill"></div>
+          </div>
+          <div class="meter-stats">
+            <span id="meterSpeed">0.0 MB/s</span>
+            <span id="meterPercent">0.0%</span>
+            <span id="meterBytes">0 B / 0 B</span>
+          </div>
+        </div>
+
+        <!-- Visual Chunk Matrix -->
+        <div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+            <label style="margin:0;">Live Chunk Verification Matrix</label>
+            <span id="chunkSummary" class="mono" style="font-size:11px; color:var(--text-dim);">0/0</span>
+          </div>
+          <div id="chunkMatrix" class="chunk-matrix">
+            <div style="color:var(--text-dim); font-size:11px; grid-column:1/-1; padding:0.5rem; text-align:center;">
+              Chunk allocation blocks will materialize upon transmission.
+            </div>
+          </div>
+        </div>
+
+        <!-- Generated Output Terminal -->
+        <div id="outputContainer" class="hidden output-card">
+          <div class="pin-display-banner">
+            <div>
+              <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-weight:600;">Quick PIN Code</div>
+              <div style="font-size:12px; color:var(--text-dim);">Enter on any device at <code>/receive</code></div>
+            </div>
+            <div id="pinDisplay" class="pin-big">----</div>
+            <button id="copyPinBtn" class="btn btn-sm">Copy PIN</button>
+          </div>
+
+          <div class="form-group" style="margin:0;">
+            <label>Secure Share Link</label>
+            <div class="input-row">
+              <input id="shareLinkInput" class="mono" readonly />
+              <button id="copyLinkBtn" class="btn btn-primary btn-sm">Copy Link</button>
+            </div>
+          </div>
+
+          <div style="display:flex; justify-content:center; margin:0.5rem 0;">
+            <div class="qr-wrapper">
+              <img id="qrImage" alt="Share QR Code" />
+            </div>
+          </div>
+
+          <div class="form-group" style="margin:0;">
+            <label>Terminal / CLI Download Command</label>
+            <div class="input-row">
+              <input id="curlInput" class="mono" readonly style="font-size:11px;" />
+              <button id="copyCurlBtn" class="btn btn-sm">Copy</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/send.js"></script>
+</body>
+</html>

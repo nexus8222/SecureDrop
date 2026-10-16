@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Download Share — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <nav class="top-nav"></nav>
+
+  <main class="page-wrapper">
+    <div class="page-header">
+      <div>
+        <h1 id="shareTitle" class="page-title">Loading Share...</h1>
+        <p id="shareMeta" class="page-subtitle">Inspecting manifest and integrity checksums...</p>
+      </div>
+      <div id="statusBadges" style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <span id="readyBadge" class="badge badge-amber">Checking</span>
+      </div>
+    </div>
+
+    <!-- Security Lock Card (If password or approval required) -->
+    <div id="lockCard" class="panel hidden" style="border-color:var(--accent-amber); margin-bottom:1.5rem;">
+      <div class="panel-header">
+        <span class="panel-title" style="color:var(--accent-amber);">Access Authorization Required</span>
+      </div>
+      <p style="color:var(--text-muted); font-size:13px;">
+        This payload is locked by the sender. Provide password or submit an access request to the host node.
+      </p>
+      <div id="passwordField" class="form-group hidden" style="margin-top:0.5rem;">
+        <label>Share Password</label>
+        <input id="unlockPasswordInput" type="password" placeholder="Enter share password" />
+      </div>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <button id="requestUnlockBtn" class="btn btn-primary">Request Access</button>
+        <span id="approvalSpinner" class="mono hidden" style="font-size:12px; color:var(--accent-amber);">
+          Pending Admin Approval... Host has been notified.
+        </span>
+      </div>
+    </div>
+
+    <!-- Main Payload Manifest Panel -->
+    <div id="contentPanel" class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Payload File Manifest</span>
+        <div style="display:flex; gap:0.5rem;">
+          <button id="downloadZipBtn" class="btn btn-primary btn-sm">Download All as .ZIP</button>
+          <button id="reloadBtn" class="btn btn-sm">Reload</button>
+        </div>
+      </div>
+
+      <div style="overflow-x:auto;">
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>File Name & Path</th>
+              <th>Size</th>
+              <th>Integrity</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="fileTableBody">
+            <tr>
+              <td colspan="4" style="text-align:center; color:var(--text-dim); padding:2rem;">
+                Fetching file records...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Live Chunk Heatmap -->
+      <div style="margin-top:1rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+          <label style="margin:0;">Stored Chunk Verification Matrix</label>
+          <span id="chunkCount" class="mono" style="font-size:11px; color:var(--text-dim);">--</span>
+        </div>
+        <div id="chunkMatrix" class="chunk-matrix"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Rich Media & Code Preview Lightbox Modal -->
+  <div id="previewModal" class="modal-overlay hidden">
+    <div class="modal-box modal-lg">
+      <div class="modal-header">
+        <h3 id="previewTitle" class="mono">File Preview</h3>
+        <div style="display:flex; gap:0.5rem;">
+          <button id="copyPreviewTextBtn" class="btn btn-sm hidden">Copy Code</button>
+          <button id="closePreviewBtn" class="btn btn-sm">Close</button>
+        </div>
+      </div>
+      <div id="previewBody" style="min-height:240px; display:flex; align-items:center; justify-content:center;">
+        <!-- Dynamic media renderer -->
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/share.js"></script>
+</body>
+</html>

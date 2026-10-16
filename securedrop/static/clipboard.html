@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clipboard & Snippets — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <nav class="top-nav"></nav>
+
+  <main class="page-wrapper" style="max-width: 900px;">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Clipboard Exchange</h1>
+        <p class="page-subtitle">Instant text, code snippet, and token broadcast over LAN.</p>
+      </div>
+      <span class="badge badge-emerald">Instant Transmission</span>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Payload Editor</span>
+        <span id="charCount" class="mono" style="font-size:11px; color:var(--text-dim);">0 Characters</span>
+      </div>
+
+      <div class="form-group" style="margin:0;">
+        <textarea id="clipText" rows="10" placeholder="Paste code, keys, logs, or URLs to share..." class="mono" style="resize:vertical;"></textarea>
+      </div>
+
+      <div class="input-row" style="margin-top:0.75rem;">
+        <div class="form-group" style="flex:1; margin:0;">
+          <label>Auto-Expiration</label>
+          <select id="clipExpiry">
+            <option value="600">10 Minutes</option>
+            <option value="3600" selected>1 Hour</option>
+            <option value="86400">24 Hours</option>
+            <option value="604800">7 Days</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:1; margin:0;">
+          <label>Access Password (Optional)</label>
+          <input id="clipPassword" type="password" placeholder="Require password to read" />
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.5rem;">
+        <button id="clearClipBtn" class="btn">Clear</button>
+        <button id="publishClipBtn" class="btn btn-primary btn-lg">Publish Clipboard Snippet</button>
+      </div>
+    </div>
+
+    <!-- Generated Clipboard Result -->
+    <div id="clipOutput" class="panel hidden" style="margin-top:1.5rem; border-color:var(--accent-emerald);">
+      <div class="panel-header">
+        <span class="panel-title" style="color:var(--accent-emerald);">Snippet Published</span>
+        <span id="clipIdBadge" class="mono badge badge-emerald">--</span>
+      </div>
+
+      <div class="form-group">
+        <label>Share URL</label>
+        <div class="input-row">
+          <input id="clipUrlInput" class="mono" readonly />
+          <button id="copyClipUrlBtn" class="btn btn-primary btn-sm">Copy Link</button>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin:0;">
+        <label>Terminal / CLI Read Pipe</label>
+        <div class="input-row">
+          <input id="clipCurlInput" class="mono" readonly style="font-size:11px;" />
+          <button id="copyClipCurlBtn" class="btn btn-sm">Copy Command</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/clipboard.js"></script>
+</body>
+</html>

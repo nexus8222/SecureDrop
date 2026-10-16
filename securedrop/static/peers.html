@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LAN Peers — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <nav class="top-nav"></nav>
+
+  <main class="page-wrapper">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">LAN Peer Radar</h1>
+        <p class="page-subtitle">Zero-config UDP broadcast peer discovery (Port 45678).</p>
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <button id="probeBtn" class="btn btn-primary btn-sm">Broadcast Probe</button>
+        <button id="refreshBtn" class="btn btn-sm">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Active Peers Grid -->
+    <div id="peersGrid" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:1.25rem;">
+      <div class="panel" style="grid-column:1/-1; text-align:center; padding:3rem 1rem;">
+        <div class="mono" style="color:var(--text-dim);">Listening for LAN peer beacons...</div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/peers.js"></script>
+</body>
+</html>

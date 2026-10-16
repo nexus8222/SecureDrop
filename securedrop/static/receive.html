@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Receive Files — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <nav class="top-nav"></nav>
+
+  <main class="page-wrapper" style="max-width: 800px;">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Receive Payload</h1>
+        <p class="page-subtitle">Enter a 4-digit transfer PIN or paste a secure share link.</p>
+      </div>
+      <span class="badge badge-cyan">Zero Installation</span>
+    </div>
+
+    <!-- Quick 4-Digit PIN Terminal -->
+    <div class="panel" style="text-align: center; padding: 2rem 1.5rem;">
+      <div class="panel-header" style="justify-content: center; border: none; padding-bottom: 0;">
+        <span class="panel-title" style="font-size: 13px;">Quick Access PIN</span>
+      </div>
+      <p style="color:var(--text-muted); font-size: 13px; margin-top: 0.25rem;">
+        Type the 4-digit numeric code shown on the sender's screen:
+      </p>
+
+      <div class="pin-grid">
+        <input type="text" maxlength="1" inputmode="numeric" class="pin-digit" id="p1" autofocus />
+        <input type="text" maxlength="1" inputmode="numeric" class="pin-digit" id="p2" />
+        <input type="text" maxlength="1" inputmode="numeric" class="pin-digit" id="p3" />
+        <input type="text" maxlength="1" inputmode="numeric" class="pin-digit" id="p4" />
+      </div>
+
+      <div style="display:flex; justify-content:center; gap:0.5rem;">
+        <button id="resolvePinBtn" class="btn btn-primary btn-lg" style="min-width: 180px;">Connect via PIN</button>
+        <button id="clearPinBtn" class="btn">Clear</button>
+      </div>
+      <div id="pinStatusText" class="mono" style="font-size:12px; color:var(--text-dim); margin-top:0.75rem;"></div>
+    </div>
+
+    <!-- Direct Share URL Input -->
+    <div class="panel" style="margin-top: 1.5rem;">
+      <div class="panel-header">
+        <span class="panel-title">Or Enter Share Link / Token Directly</span>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label>Full Share URL or Token</label>
+        <div class="input-row">
+          <input id="linkInput" placeholder="http://192.168.1.X:8000/share/TOKEN#key=..." class="mono" />
+          <button id="pasteBtn" class="btn">Paste</button>
+          <button id="loadLinkBtn" class="btn btn-primary">Open</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/receive.js"></script>
+</body>
+</html>
