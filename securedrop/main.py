@@ -15,6 +15,7 @@ import sqlite3
 import struct
 import threading
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -25,7 +26,7 @@ import uvicorn
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -48,7 +49,7 @@ for d in [STORAGE_DIR, CHUNK_DIR, PULL_DIR, VAULT_DIR, TMP_DIR, QR_DIR]:
 DEFAULT_WEB_PORT = int(os.environ.get("SECUREDROP_WEB_PORT", "8000"))
 DEFAULT_TCP_PORT = int(os.environ.get("SECUREDROP_TCP_PORT", "9001"))
 DISCOVERY_PORT = int(os.environ.get("SECUREDROP_DISCOVERY_PORT", "45678"))
-DEFAULT_DEVICE_NAME = os.environ.get("SECUREDROP_DEVICE_NAME") or socket.gethostname() or "SecureDrop-Node"
+DEFAULT_DEVICE_NAME = os.environ.get("SECUREDROP_DEVICE_NAME") or "SecureDrop SafeNode"
 
 
 def now() -> int:
@@ -135,6 +136,7 @@ class Database:
                 );
                 CREATE TABLE IF NOT EXISTS shares(
                     token TEXT PRIMARY KEY,
+                    pin TEXT,
                     title TEXT,
                     mode TEXT NOT NULL DEFAULT 'files',
                     created_at INTEGER NOT NULL,
@@ -245,8 +247,43 @@ class Database:
                     created_at INTEGER NOT NULL,
                     expires_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS users(
+                    id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    display_name TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    salt TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'member',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at INTEGER NOT NULL,
+                    last_login INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS user_sessions(
+                    token_hash TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    ip TEXT,
+                    user_agent TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
                 """
             )
+            try:
+                con.execute("ALTER TABLE shares ADD COLUMN pin TEXT")
+            except Exception:
+                pass
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_pin ON shares(pin)")
+
+            try:
+                con.execute("ALTER TABLE shares ADD COLUMN owner_user_id TEXT")
+            except Exception:
+                pass
+
+            curr_name = self.get_setting("device_name")
+            if not curr_name or curr_name == socket.gethostname():
+                self.set_setting("device_name", os.environ.get("SECUREDROP_DEVICE_NAME") or "SecureDrop SafeNode")
+
             if not self.get_setting("device_id"):
                 device_id = "dev_" + b64url(secrets.token_bytes(16))
                 self.set_setting("device_id", device_id)
@@ -546,6 +583,7 @@ class ShareCreate(BaseModel):
     mode: str = "files"
     expires_seconds: Optional[int] = None
     password: Optional[str] = None
+    pin: Optional[str] = None
     require_approval: bool = False
     delete_after_download: bool = False
     max_downloads: int = 0
@@ -598,11 +636,35 @@ class ClipboardCreate(BaseModel):
 
 
 class AuthLogin(BaseModel):
+    username: Optional[str] = "admin"
     password: str
 
 
 class AuthSetup(BaseModel):
     password: str
+
+
+class UserLogin(BaseModel):
+    username: Optional[str] = "admin"
+    password: str
+
+
+class UserRegister(BaseModel):
+    username: str
+    display_name: Optional[str] = None
+    password: str
+
+
+class UserCreateAdmin(BaseModel):
+    username: str
+    display_name: str
+    password: str
+    role: str = "member"
+
+
+class UserRoleUpdate(BaseModel):
+    role: Optional[str] = None
+    status: Optional[str] = None
 
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
@@ -613,15 +675,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 ADMIN_COOKIE = "securedrop_admin"
 ADMIN_SESSION_TTL = 7 * 24 * 3600
+USER_COOKIE = "securedrop_session"
+USER_SESSION_TTL = 7 * 24 * 3600
 
 
 def _token_hash(token: str) -> str:
     return hashlib.sha256(("admin-session:" + token).encode()).hexdigest()
+
+
+def _user_token_hash(token: str) -> str:
+    return hashlib.sha256(("user-session:" + token).encode()).hexdigest()
+
+
+def hash_user_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    if not salt:
+        salt = b64url(secrets.token_bytes(16))
+    digest = hashlib.sha256((salt + ":" + (password or "")).encode()).hexdigest()
+    return digest, salt
+
+
+def verify_user_password(password: str, salt: str, expected_hash: str) -> bool:
+    if not salt or not expected_hash:
+        return False
+    digest = hashlib.sha256((salt + ":" + (password or "")).encode()).hexdigest()
+    return secrets.compare_digest(digest, expected_hash)
 
 
 def admin_configured() -> bool:
@@ -636,12 +729,40 @@ def set_admin_password(password: str) -> None:
     digest = hashlib.sha256((salt + ":" + password).encode()).hexdigest()
     db.set_setting("admin_password_salt", salt)
     db.set_setting("admin_password_hash", digest)
+    admin_row = db.one("SELECT * FROM users WHERE username='admin'")
+    if not admin_row:
+        db.execute(
+            """
+            INSERT OR REPLACE INTO users(id, username, display_name, password_hash, salt, role, status, created_at, last_login)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            ("usr_admin", "admin", "Administrator", digest, salt, "admin", "active", now(), now()),
+        )
+    else:
+        db.execute("UPDATE users SET password_hash=?, salt=? WHERE username='admin'", (digest, salt))
+
+
+def ensure_admin_user() -> None:
+    salt = db.get_setting("admin_password_salt")
+    digest = db.get_setting("admin_password_hash")
+    if not salt or not digest:
+        return
+    admin_row = db.one("SELECT * FROM users WHERE username='admin'")
+    if not admin_row:
+        db.execute(
+            """
+            INSERT OR REPLACE INTO users(id, username, display_name, password_hash, salt, role, status, created_at, last_login)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            """,
+            ("usr_admin", "admin", "Administrator", digest, salt, "admin", "active", now(), now()),
+        )
 
 
 def ensure_env_admin_password() -> None:
     env_password = os.environ.get("SECUREDROP_ADMIN_PASSWORD")
     if env_password and not admin_configured():
         set_admin_password(env_password)
+    ensure_admin_user()
 
 
 def verify_admin_password(password: str) -> bool:
@@ -672,16 +793,93 @@ def create_admin_session(request: Request, response: Response) -> str:
     return token
 
 
+def create_user_session(user_id: str, request: Request, response: Response) -> str:
+    token = "usr_tok_" + b64url(secrets.token_bytes(32))
+    client_ip = request.client.host if request.client else ""
+    user_agent = request.headers.get("user-agent", "")[:250]
+    db.execute(
+        """
+        INSERT INTO user_sessions(token_hash, user_id, created_at, expires_at, ip, user_agent)
+        VALUES(?,?,?,?,?,?)
+        """,
+        (_user_token_hash(token), user_id, now(), now() + USER_SESSION_TTL, client_ip, user_agent),
+    )
+    response.set_cookie(
+        USER_COOKIE,
+        token,
+        max_age=USER_SESSION_TTL,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        path="/",
+    )
+    db.execute("UPDATE users SET last_login=? WHERE id=?", (now(), user_id))
+    return token
+
+
+def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
+    ensure_admin_user()
+    token = request.cookies.get(USER_COOKIE)
+    if token:
+        row = db.one(
+            """
+            SELECT s.expires_at, u.id, u.username, u.display_name, u.role, u.status
+            FROM user_sessions s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.token_hash = ?
+            """,
+            (_user_token_hash(token),),
+        )
+        if row:
+            if int(row["expires_at"]) < now():
+                db.execute("DELETE FROM user_sessions WHERE token_hash=?", (_user_token_hash(token),))
+            elif row["status"] == "active":
+                return {
+                    "id": row["id"],
+                    "username": row["username"],
+                    "display_name": row["display_name"],
+                    "role": row["role"],
+                    "status": row["status"],
+                }
+
+    # Check legacy admin cookie
+    adm_token = request.cookies.get(ADMIN_COOKIE)
+    if adm_token:
+        row = db.one("SELECT * FROM admin_sessions WHERE token_hash=?", (_token_hash(adm_token),))
+        if row and int(row["expires_at"]) >= now():
+            admin_row = db.one("SELECT id, username, display_name, role, status FROM users WHERE username='admin'")
+            if admin_row:
+                return {
+                    "id": admin_row["id"],
+                    "username": admin_row["username"],
+                    "display_name": admin_row["display_name"],
+                    "role": "admin",
+                    "status": "active",
+                }
+            return {
+                "id": "usr_admin",
+                "username": "admin",
+                "display_name": "Administrator",
+                "role": "admin",
+                "status": "active",
+            }
+    return None
+
+
 def is_admin_request(request: Request) -> bool:
     ensure_env_admin_password()
-    token = request.cookies.get(ADMIN_COOKIE)
-    if not token:
+    user = get_current_user(request)
+    if user and user.get("role") == "admin":
+        return True
+
+    adm_token = request.cookies.get(ADMIN_COOKIE)
+    if not adm_token:
         return False
-    row = db.one("SELECT * FROM admin_sessions WHERE token_hash=?", (_token_hash(token),))
+    row = db.one("SELECT * FROM admin_sessions WHERE token_hash=?", (_token_hash(adm_token),))
     if not row:
         return False
     if int(row["expires_at"]) < now():
-        db.execute("DELETE FROM admin_sessions WHERE token_hash=?", (_token_hash(token),))
+        db.execute("DELETE FROM admin_sessions WHERE token_hash=?", (_token_hash(adm_token),))
         return False
     return True
 
@@ -696,6 +894,14 @@ def clear_admin_session(request: Request, response: Response) -> None:
     if token:
         db.execute("DELETE FROM admin_sessions WHERE token_hash=?", (_token_hash(token),))
     response.delete_cookie(ADMIN_COOKIE, path="/")
+
+
+def clear_user_session(request: Request, response: Response) -> None:
+    token = request.cookies.get(USER_COOKIE)
+    if token:
+        db.execute("DELETE FROM user_sessions WHERE token_hash=?", (_user_token_hash(token),))
+    response.delete_cookie(USER_COOKIE, path="/")
+    clear_admin_session(request, response)
 
 
 def password_hash(password: str) -> str:
@@ -765,9 +971,11 @@ def get_share_metadata(token: str, ticket: Optional[str] = None, include_private
         raise HTTPException(404, "Share not found")
     check_share_open(row)
     locked = bool(row["password_hash"] or row["require_approval"])
+    pin_val = row["pin"] if "pin" in row.keys() else None
     if locked and not validate_ticket(token, ticket):
         return {
             "token": token,
+            "pin": pin_val,
             "locked": True,
             "requires_password": bool(row["password_hash"]),
             "requires_approval": bool(row["require_approval"]),
@@ -786,6 +994,7 @@ def get_share_metadata(token: str, ticket: Optional[str] = None, include_private
     meta = json.loads(row["meta_json"] or "{}")
     return {
         "token": token,
+        "pin": pin_val,
         "locked": False,
         "requires_password": bool(row["password_hash"]),
         "requires_approval": bool(row["require_approval"]),
@@ -818,12 +1027,42 @@ def read_chunk_bytes(token: str, file_id: str, chunk_index: int, ticket: Optiona
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "send.html")
+
+
+@app.get("/send", response_class=HTMLResponse)
+async def send_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "send.html")
+
+
+@app.get("/receive", response_class=HTMLResponse)
+async def receive_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "receive.html")
 
 
 @app.get("/share/{token}", response_class=HTMLResponse)
 async def share_page(token: str) -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "share.html")
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+
+@app.get("/peers", response_class=HTMLResponse)
+async def peers_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "peers.html")
+
+
+@app.get("/clipboard", response_class=HTMLResponse)
+async def clipboard_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "clipboard.html")
 
 
 @app.get("/manifest.json")
@@ -840,14 +1079,37 @@ async def service_worker() -> FileResponse:
 async def auth_status(request: Request) -> Dict[str, Any]:
     ensure_env_admin_password()
     configured = admin_configured()
+    user = get_current_user(request)
     admin = is_admin_request(request)
+    role = "admin" if admin else (user.get("role") if user else "guest")
     return {
         "configured": configured,
-        "role": "admin" if admin else "guest",
+        "role": role,
         "is_admin": admin,
+        "authenticated": bool(user),
+        "user": user or {"id": "guest", "username": "guest", "display_name": "Guest User", "role": "guest"},
         "can_setup": not configured,
         "guest_permissions": ["send", "receive"],
-        "admin_permissions": ["approvals", "peers", "queue", "history", "storage", "settings"],
+        "admin_permissions": ["approvals", "peers", "queue", "history", "storage", "settings", "users"],
+    }
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        return {
+            "authenticated": False,
+            "user": {
+                "id": "guest",
+                "username": "guest",
+                "display_name": "Guest User",
+                "role": "guest",
+            },
+        }
+    return {
+        "authenticated": True,
+        "user": user,
     }
 
 
@@ -858,24 +1120,176 @@ async def auth_setup(data: AuthSetup, request: Request, response: Response) -> D
         raise HTTPException(409, "Admin password is already configured")
     set_admin_password(data.password)
     create_admin_session(request, response)
+    user_row = db.one("SELECT * FROM users WHERE username='admin'")
+    if user_row:
+        create_user_session(user_row["id"], request, response)
     return {"ok": True, "role": "admin"}
 
 
 @app.post("/api/auth/login")
-async def auth_login(data: AuthLogin, request: Request, response: Response) -> Dict[str, Any]:
+async def auth_login(data: UserLogin, request: Request, response: Response) -> Dict[str, Any]:
     ensure_env_admin_password()
-    if not admin_configured():
-        raise HTTPException(400, "Admin password is not configured yet")
-    if not verify_admin_password(data.password):
-        raise HTTPException(403, "Wrong admin password")
-    create_admin_session(request, response)
-    return {"ok": True, "role": "admin"}
+    username = (data.username or "admin").strip()
+    password = data.password or ""
+
+    # Check in users table first
+    user_row = db.one("SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username,))
+    if not user_row and username.lower() == "admin":
+        if verify_admin_password(password):
+            ensure_admin_user()
+            user_row = db.one("SELECT * FROM users WHERE username='admin'")
+
+    if not user_row:
+        # Check admin fallback
+        if username.lower() == "admin" and verify_admin_password(password):
+            create_admin_session(request, response)
+            return {"ok": True, "role": "admin", "user": {"id": "usr_admin", "username": "admin", "display_name": "Administrator", "role": "admin"}}
+        raise HTTPException(401, "Invalid username or password")
+
+    if user_row["status"] != "active":
+        raise HTTPException(403, "Account is disabled")
+
+    if not verify_user_password(password, user_row["salt"], user_row["password_hash"]):
+        raise HTTPException(401, "Invalid username or password")
+
+    create_user_session(user_row["id"], request, response)
+    if user_row["role"] == "admin":
+        create_admin_session(request, response)
+
+    return {
+        "ok": True,
+        "role": user_row["role"],
+        "user": {
+            "id": user_row["id"],
+            "username": user_row["username"],
+            "display_name": user_row["display_name"],
+            "role": user_row["role"],
+        },
+    }
+
+
+@app.post("/api/auth/register")
+async def auth_register(data: UserRegister, request: Request, response: Response) -> Dict[str, Any]:
+    ensure_env_admin_password()
+    username = (data.username or "").strip()
+    if not username or len(username) < 3 or len(username) > 32:
+        raise HTTPException(400, "Username must be between 3 and 32 characters")
+    if not all(c.isalnum() or c in "_-." for c in username):
+        raise HTTPException(400, "Username contains invalid characters")
+    password = data.password or ""
+    if len(password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+
+    existing = db.one("SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username,))
+    if existing:
+        raise HTTPException(409, "Username is already taken")
+
+    display_name = (data.display_name or "").strip() or username
+    digest, salt = hash_user_password(password)
+    user_id = "usr_" + b64url(secrets.token_bytes(10))
+
+    user_count_row = db.one("SELECT COUNT(*) AS c FROM users")
+    total_users = user_count_row["c"] if user_count_row else 0
+    role = "admin" if total_users == 0 else "member"
+
+    db.execute(
+        """
+        INSERT INTO users(id, username, display_name, password_hash, salt, role, status, created_at, last_login)
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (user_id, username, display_name, digest, salt, role, "active", now(), now()),
+    )
+
+    create_user_session(user_id, request, response)
+    if role == "admin":
+        if not admin_configured():
+            set_admin_password(password)
+        create_admin_session(request, response)
+
+    return {
+        "ok": True,
+        "role": role,
+        "user": {
+            "id": user_id,
+            "username": username,
+            "display_name": display_name,
+            "role": role,
+        },
+    }
 
 
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request, response: Response) -> Dict[str, Any]:
-    clear_admin_session(request, response)
+    clear_user_session(request, response)
     return {"ok": True, "role": "guest"}
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request) -> Dict[str, Any]:
+    require_admin(request)
+    rows = db.all(
+        """
+        SELECT u.id, u.username, u.display_name, u.role, u.status, u.created_at, u.last_login,
+               (SELECT COUNT(*) FROM shares s WHERE s.owner_user_id = u.id) AS share_count
+        FROM users u
+        ORDER BY u.created_at ASC
+        """
+    )
+    return {"ok": True, "users": [dict(r) for r in rows]}
+
+
+@app.post("/api/admin/users")
+async def admin_create_user(data: UserCreateAdmin, request: Request) -> Dict[str, Any]:
+    require_admin(request)
+    username = (data.username or "").strip()
+    if not username or len(username) < 3:
+        raise HTTPException(400, "Username too short (minimum 3 chars)")
+    if not data.password or len(data.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    existing = db.one("SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username,))
+    if existing:
+        raise HTTPException(409, "Username already exists")
+    role = data.role if data.role in ["admin", "member", "guest"] else "member"
+    digest, salt = hash_user_password(data.password)
+    user_id = "usr_" + b64url(secrets.token_bytes(10))
+    display_name = data.display_name.strip() or username
+    db.execute(
+        """
+        INSERT INTO users(id, username, display_name, password_hash, salt, role, status, created_at)
+        VALUES(?,?,?,?,?,?,?,?)
+        """,
+        (user_id, username, display_name, digest, salt, role, "active", now()),
+    )
+    return {"ok": True, "user_id": user_id}
+
+
+@app.put("/api/admin/users/{user_id}/role")
+async def admin_update_user_role(user_id: str, data: UserRoleUpdate, request: Request) -> Dict[str, Any]:
+    require_admin(request)
+    target = db.one("SELECT * FROM users WHERE id=?", (user_id,))
+    if not target:
+        raise HTTPException(404, "User not found")
+    if data.role:
+        if data.role not in ["admin", "member", "guest"]:
+            raise HTTPException(400, "Invalid role")
+        db.execute("UPDATE users SET role=? WHERE id=?", (data.role, user_id))
+    if data.status:
+        if data.status not in ["active", "disabled"]:
+            raise HTTPException(400, "Invalid status")
+        db.execute("UPDATE users SET status=? WHERE id=?", (data.status, user_id))
+    return {"ok": True}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, request: Request) -> Dict[str, Any]:
+    require_admin(request)
+    current_user = get_current_user(request)
+    if current_user and current_user.get("id") == user_id:
+        raise HTTPException(400, "Cannot delete your own account")
+    if user_id == "usr_admin":
+        raise HTTPException(400, "Cannot delete root admin account")
+    db.execute("DELETE FROM users WHERE id=?", (user_id,))
+    return {"ok": True}
 
 
 @app.websocket("/ws")
@@ -901,22 +1315,40 @@ async def api_info(request: Request) -> Dict[str, Any]:
     web_port = getattr(request.app.state, "web_port", DEFAULT_WEB_PORT)
     tcp_port = getattr(request.app.state, "tcp_port", DEFAULT_TCP_PORT)
     client_host = request.client.host if request.client else None
+    current_user = get_current_user(request)
+    admin = is_admin_request(request)
+    role = "admin" if admin else (current_user.get("role") if current_user else "guest")
+
+    # Isolate server OS identity: guests and remote browsers see neutral "SecureDrop LAN"
+    device_name = db.get_setting("device_name", "SecureDrop SafeNode")
+    if not admin:
+        device_name = "SecureDrop LAN"
+        device_id = "node"
+    else:
+        device_id = db.get_setting("device_id")
+
     return {
         "app": APP_NAME,
         "version": APP_VERSION,
-        "device_id": db.get_setting("device_id"),
-        "device_name": db.get_setting("device_name", DEFAULT_DEVICE_NAME),
-        "fingerprint": db.get_setting("identity_fingerprint"),
-        "node_ips": ips,
+        "device_id": device_id,
+        "device_name": device_name,
+        "fingerprint": db.get_setting("identity_fingerprint") if admin else None,
+        "node_ips": ips if admin else ([ips[0]] if ips else ["127.0.0.1"]),
         "web_port": web_port,
         "tcp_port": tcp_port,
         "web_urls": [f"http://{ip}:{web_port}" for ip in ips],
-        "tcp_addresses": [f"{ip}:{tcp_port}" for ip in ips],
+        "tcp_addresses": [f"{ip}:{tcp_port}" for ip in ips] if admin else [],
         "browser_client_ip": client_host,
-        "discovery_port": DISCOVERY_PORT,
-        "role": "admin" if is_admin_request(request) else "guest",
+        "discovery_port": DISCOVERY_PORT if admin else None,
+        "role": role,
+        "user": current_user or {
+            "id": "guest",
+            "username": "guest",
+            "display_name": "Guest User",
+            "role": "guest",
+        },
         "admin_configured": admin_configured(),
-        "storage_dir": str(STORAGE_DIR) if is_admin_request(request) else None,
+        "storage_dir": str(STORAGE_DIR) if admin else None,
     }
 
 
@@ -985,18 +1417,31 @@ async def list_trust(request: Request) -> Dict[str, Any]:
     return {"devices": [row_to_dict(r) for r in db.all("SELECT * FROM trusted_devices ORDER BY updated_at DESC")]}
 
 
+def generate_unique_pin() -> str:
+    for _ in range(200):
+        pin = f"{secrets.randbelow(9000) + 1000}"
+        row = db.one("SELECT token FROM shares WHERE pin=? AND status='open'", (pin,))
+        if not row:
+            return pin
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
 @app.post("/api/shares")
 async def create_share(data: ShareCreate, request: Request) -> Dict[str, Any]:
     token = b64url(secrets.token_bytes(10))
+    pin = data.pin or generate_unique_pin()
     exp = now() + data.expires_seconds if data.expires_seconds else None
     ph = password_hash(data.password) if data.password else None
+    user = get_current_user(request)
+    owner_user_id = user["id"] if user else None
     db.execute(
         """
-        INSERT INTO shares(token,title,mode,created_at,expires_at,password_hash,require_approval,delete_after_download,max_downloads,owner_device_id,meta_json)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO shares(token,pin,title,mode,created_at,expires_at,password_hash,require_approval,delete_after_download,max_downloads,owner_device_id,owner_user_id,meta_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             token,
+            pin,
             data.title,
             data.mode,
             now(),
@@ -1006,6 +1451,7 @@ async def create_share(data: ShareCreate, request: Request) -> Dict[str, Any]:
             int(data.delete_after_download),
             int(data.max_downloads or 0),
             db.get_setting("device_id"),
+            owner_user_id,
             json.dumps(data.meta or {}),
         ),
     )
@@ -1015,10 +1461,10 @@ async def create_share(data: ShareCreate, request: Request) -> Dict[str, Any]:
         create_server_key_for_share(token)
     db.execute(
         "INSERT INTO history(id,direction,title,peer,status,detail,created_at) VALUES(?,?,?,?,?,?,?)",
-        ("hist_" + b64url(secrets.token_bytes(8)), "created", data.title, request.client.host if request.client else "local", "open", f"Share {token} created", now()),
+        ("hist_" + b64url(secrets.token_bytes(8)), "created", data.title, request.client.host if request.client else "local", "open", f"Share {token} (PIN: {pin}) created", now()),
     )
-    await ws_manager.broadcast({"type": "share_created", "token": token, "title": data.title})
-    return {"ok": True, "token": token}
+    await ws_manager.broadcast({"type": "share_created", "token": token, "title": data.title, "pin": pin})
+    return {"ok": True, "token": token, "pin": pin}
 
 
 @app.post("/api/shares/{token}/files")
@@ -1228,6 +1674,299 @@ async def download_plain_chunk_server_decrypted(token: str, file_id: str, chunk_
     return Response(content=plain, media_type="application/octet-stream", headers=headers)
 
 
+def parse_range_header(range_header: str, file_size: int) -> Optional[Tuple[int, int]]:
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    try:
+        parts = range_header[6:].split("-")
+        if len(parts) != 2:
+            return None
+        start_str, end_str = parts[0].strip(), parts[1].strip()
+        if start_str and end_str:
+            start = int(start_str)
+            end = int(end_str)
+        elif start_str:
+            start = int(start_str)
+            end = file_size - 1
+        elif end_str:
+            suffix = int(end_str)
+            start = max(0, file_size - suffix)
+            end = file_size - 1
+        else:
+            return None
+        if start < 0 or start > end or start >= file_size:
+            return None
+        end = min(end, file_size - 1)
+        return (start, end)
+    except Exception:
+        return None
+
+
+def read_decrypted_chunk(token: str, file_row: sqlite3.Row, chunk_index: int, key_bytes: Optional[bytes] = None, ticket: Optional[str] = None) -> bytes:
+    data, meta = read_chunk_bytes(token, file_row["id"], chunk_index, ticket=ticket)
+    if key_bytes:
+        nonce = data[:12]
+        cipher = data[12:]
+        plain = AESGCM(key_bytes).decrypt(nonce, cipher, None)
+    else:
+        key_b64 = db.get_setting(server_key_setting(token))
+        if key_b64:
+            aes = AESGCM(b64url_decode(key_b64))
+            nonce = data[:12]
+            cipher = data[12:]
+            plain = aes.decrypt(nonce, cipher, None)
+        else:
+            raise HTTPException(400, "Decryption key required. Provide #key fragment or ?key= parameter.")
+
+    if meta.get("compression") == "gzip":
+        plain = gzip.decompress(plain)
+    if meta.get("plaintext_sha256") and sha256_bytes(plain) != meta.get("plaintext_sha256"):
+        raise HTTPException(500, "Plaintext integrity mismatch")
+    return plain
+
+
+@app.get("/api/shares/by-pin/{pin}")
+async def get_share_by_pin(pin: str) -> Dict[str, Any]:
+    row = db.one("SELECT * FROM shares WHERE pin=? AND status='open'", (pin,))
+    if not row:
+        raise HTTPException(404, "No active share found with this PIN")
+    check_share_open(row)
+    return {
+        "ok": True,
+        "token": row["token"],
+        "title": row["title"],
+        "pin": row["pin"],
+        "requires_password": bool(row["password_hash"]),
+        "requires_approval": bool(row["require_approval"])
+    }
+
+
+@app.get("/api/shares/{token}/files/{file_id}/stream")
+async def stream_file(
+    token: str,
+    file_id: str,
+    request: Request,
+    ticket: Optional[str] = None,
+    key: Optional[str] = None,
+    download: bool = False
+) -> Response:
+    row = db.one("SELECT * FROM shares WHERE token=?", (token,))
+    if not row:
+        raise HTTPException(404, "Share not found")
+    check_share_open(row)
+    if not validate_ticket(token, ticket):
+        raise HTTPException(403, "Access denied")
+
+    file_row = db.one("SELECT * FROM files WHERE id=? AND share_token=?", (file_id, token))
+    if not file_row:
+        raise HTTPException(404, "File not found")
+
+    file_size = int(file_row["size"])
+    chunk_size = int(file_row["chunk_size"])
+    chunk_count = int(file_row["chunk_count"])
+    mime_type = file_row["mime"] or "application/octet-stream"
+
+    key_str = key or request.headers.get("x-decrypt-key")
+    key_bytes = b64url_decode(key_str) if key_str else None
+
+    range_header = request.headers.get("range")
+    range_tuple = parse_range_header(range_header, file_size) if range_header else None
+
+    filename = file_row["name"] or "download"
+    disposition = "attachment" if download else "inline"
+
+    if range_tuple:
+        start, end = range_tuple
+        content_length = end - start + 1
+
+        async def range_generator():
+            for idx in range(chunk_count):
+                c_start = idx * chunk_size
+                c_end = min((idx + 1) * chunk_size - 1, file_size - 1)
+                if c_end < start or c_start > end:
+                    continue
+                slice_start = max(0, start - c_start)
+                slice_end = min(c_end - c_start + 1, end - c_start + 1)
+                plain = read_decrypted_chunk(token, file_row, idx, key_bytes, ticket=ticket)
+                sliced = plain[slice_start:slice_end]
+                offset = 0
+                while offset < len(sliced):
+                    chunk = sliced[offset:offset + 65536]
+                    yield chunk
+                    offset += len(chunk)
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "Cache-Control": "no-cache"
+        }
+        return StreamingResponse(range_generator(), status_code=206, media_type=mime_type, headers=headers)
+    else:
+        async def full_generator():
+            for idx in range(chunk_count):
+                plain = read_decrypted_chunk(token, file_row, idx, key_bytes, ticket=ticket)
+                offset = 0
+                while offset < len(plain):
+                    chunk = plain[offset:offset + 65536]
+                    yield chunk
+                    offset += len(chunk)
+
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "Cache-Control": "no-cache"
+        }
+        return StreamingResponse(full_generator(), status_code=200, media_type=mime_type, headers=headers)
+
+
+@app.get("/api/shares/{token}/files/{file_id}/preview")
+async def preview_file(
+    token: str,
+    file_id: str,
+    request: Request,
+    ticket: Optional[str] = None,
+    key: Optional[str] = None,
+    inline: bool = True
+) -> Response:
+    return await stream_file(token, file_id, request, ticket=ticket, key=key, download=not inline)
+
+
+@app.get("/api/shares/{token}/zip")
+async def stream_zip(
+    token: str,
+    request: Request,
+    ticket: Optional[str] = None,
+    key: Optional[str] = None
+) -> Response:
+    row = db.one("SELECT * FROM shares WHERE token=?", (token,))
+    if not row:
+        raise HTTPException(404, "Share not found")
+    check_share_open(row)
+    if not validate_ticket(token, ticket):
+        raise HTTPException(403, "Access denied")
+
+    files = db.all("SELECT * FROM files WHERE share_token=? ORDER BY relative_path", (token,))
+    if not files:
+        raise HTTPException(404, "No files in share")
+
+    key_str = key or request.headers.get("x-decrypt-key")
+    key_bytes = b64url_decode(key_str) if key_str else None
+
+    share_title = row["title"] or f"securedrop_{token}"
+    safe_title = "".join(c for c in share_title if c.isalnum() or c in ("-", "_", " ")).strip() or token
+
+    async def zip_generator():
+        entries = []
+        offset = 0
+
+        for f in files:
+            name_str = f["relative_path"] or f["name"] or f["id"]
+            name_bytes = name_str.encode("utf-8")
+            file_size = int(f["size"])
+            chunk_count = int(f["chunk_count"])
+            local_offset = offset
+
+            local_header = struct.pack(
+                "<4sHHHHHIIIHH",
+                b"PK\x03\x04",
+                20,
+                0x0008,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                len(name_bytes),
+                0
+            )
+            yield local_header
+            yield name_bytes
+            offset += len(local_header) + len(name_bytes)
+
+            crc = 0
+            for c_idx in range(chunk_count):
+                plain = read_decrypted_chunk(token, f, c_idx, key_bytes, ticket=ticket)
+                crc = zlib.crc32(plain, crc) & 0xffffffff
+                yield plain
+                offset += len(plain)
+
+            desc = struct.pack("<4sIII", b"PK\x07\x08", crc, file_size, file_size)
+            yield desc
+            offset += len(desc)
+
+            entries.append((name_bytes, crc, file_size, local_offset))
+
+        cd_start = offset
+        for name_bytes, crc, file_size, local_offset in entries:
+            cd_header = struct.pack(
+                "<4sHHHHHHIIIHHHHHII",
+                b"PK\x01\x02",
+                20,
+                20,
+                0x0008,
+                0,
+                0,
+                0,
+                crc,
+                file_size,
+                file_size,
+                len(name_bytes),
+                0,
+                0,
+                0,
+                0,
+                0,
+                local_offset
+            )
+            yield cd_header
+            yield name_bytes
+            offset += len(cd_header) + len(name_bytes)
+
+        cd_size = offset - cd_start
+        eocd = struct.pack(
+            "<4sHHHHIIH",
+            b"PK\x05\x06",
+            0,
+            0,
+            len(entries),
+            len(entries),
+            cd_size,
+            cd_start,
+            0
+        )
+        yield eocd
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{safe_title}.zip"',
+        "Cache-Control": "no-cache"
+    }
+    return StreamingResponse(zip_generator(), status_code=200, media_type="application/zip", headers=headers)
+
+
+@app.get("/api/system/stats")
+async def system_stats(request: Request) -> Dict[str, Any]:
+    require_admin(request)
+    storage_stat = shutil.disk_usage(STORAGE_DIR)
+    share_count = db.one("SELECT COUNT(*) AS c FROM shares")["c"]
+    chunk_count = db.one("SELECT COUNT(*) AS c FROM chunks")["c"]
+    history_count = db.one("SELECT COUNT(*) AS c FROM history")["c"]
+    return {
+        "storage": {
+            "total_bytes": storage_stat.total,
+            "used_bytes": storage_stat.used,
+            "free_bytes": storage_stat.free
+        },
+        "shares_count": share_count,
+        "chunks_count": chunk_count,
+        "history_count": history_count,
+        "uptime": now()
+    }
+
+
 @app.post("/api/shares/{token}/download-complete")
 async def download_complete(token: str, ticket: Optional[str] = None) -> Dict[str, Any]:
     if not validate_ticket(token, ticket):
@@ -1264,8 +2003,16 @@ async def share_qr(token: str, request: Request, key: Optional[str] = None) -> F
 
 @app.get("/api/shares")
 async def list_shares(request: Request) -> Dict[str, Any]:
-    require_admin(request)
-    rows = db.all("SELECT * FROM shares ORDER BY created_at DESC LIMIT 100")
+    user = get_current_user(request)
+    admin = is_admin_request(request)
+    if not admin and not user:
+        raise HTTPException(401, "Authentication required to inspect shares")
+
+    if admin:
+        rows = db.all("SELECT * FROM shares ORDER BY created_at DESC LIMIT 100")
+    else:
+        rows = db.all("SELECT * FROM shares WHERE owner_user_id=? ORDER BY created_at DESC LIMIT 100", (user["id"],))
+
     out = []
     for r in rows:
         d = row_to_dict(r) or {}
@@ -1281,10 +2028,18 @@ async def list_shares(request: Request) -> Dict[str, Any]:
 
 @app.delete("/api/shares/{token}")
 async def delete_share(token: str, request: Request) -> Dict[str, Any]:
-    require_admin(request)
+    user = get_current_user(request)
+    admin = is_admin_request(request)
+    if not admin and not user:
+        raise HTTPException(401, "Authentication required")
+
     row = db.one("SELECT * FROM shares WHERE token=?", (token,))
     if not row:
         raise HTTPException(404, "Share not found")
+
+    if not admin and row["owner_user_id"] != user["id"]:
+        raise HTTPException(403, "Permission denied: you cannot delete another user's share")
+
     db.execute("UPDATE shares SET status='deleted' WHERE token=?", (token,))
     path = share_dir(token)
     if path.exists():
