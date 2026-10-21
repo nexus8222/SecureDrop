@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin Dashboard — SecureDrop LAN</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=2.4.0" />
 </head>
 <body>
   <nav class="top-nav"></nav>
@@ -20,7 +20,7 @@
 
     <!-- Admin Login Gate -->
     <div id="loginGate" class="panel hidden" style="text-align:center; padding:3rem 1.5rem;">
-      <div style="font-size:32px; margin-bottom:0.75rem;">🔒</div>
+      <div style="font-size:24px; margin-bottom:0.75rem; color:var(--accent-amber); font-family:var(--font-mono);">[Locked: Administrator Access Required]</div>
       <h3 style="font-size:16px; margin-bottom:0.5rem;">Administrator Authentication Required</h3>
       <p style="color:var(--text-muted); font-size:13px; max-width:440px; margin:0 auto 1.5rem;">
         Approvals, server storage management, background pull jobs, and device settings are restricted to the node administrator.
@@ -43,8 +43,9 @@
           <div id="statNodeFingerprint" class="mono" style="font-size:11px; color:var(--text-dim);">Fingerprint: --</div>
         </div>
         <div class="panel" style="padding:1rem;">
-          <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-family:var(--font-mono);">LAN Endpoints</div>
-          <div id="statEndpoints" class="mono" style="font-size:12px; color:var(--accent-emerald); margin-top:0.25rem; line-height:1.4;">--</div>
+          <div style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-family:var(--font-mono);">Security Layer</div>
+          <div class="mono" style="font-size:18px; font-weight:700; color:var(--accent-emerald); margin:0.25rem 0;">Active · Protected</div>
+          <div id="statSecurityDetail" class="mono" style="font-size:11px; color:var(--text-dim);">AES-GCM · PBKDF2 · Blake2b</div>
         </div>
       </div>
 
@@ -64,114 +65,242 @@
         </div>
       </section>
 
-      <!-- Storage Management -->
-      <section class="panel" style="margin-bottom:1.5rem;">
-        <div class="panel-header">
-          <span class="panel-title">Server Storage & Shares</span>
-          <div style="display:flex; gap:0.5rem;">
-            <button id="refreshStorageBtn" class="btn btn-sm">Refresh</button>
-            <button id="purgeAllBtn" class="btn btn-sm btn-danger">Purge All Server Storage</button>
+      <!-- Enterprise Management Modals Hub (Clean Modern Cards) -->
+      <section style="margin-bottom:1.5rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+          <div>
+            <h2 style="font-size:16px; font-weight:600; color:var(--text-main); margin:0;">Enterprise Management Modals</h2>
+            <p style="font-size:12px; color:var(--text-muted); margin:2px 0 0;">Dedicated paginated audit tools (25 / 100 / 200 rows per query).</p>
           </div>
         </div>
 
-        <div style="overflow-x:auto;">
-          <table class="file-table">
-            <thead>
-              <tr>
-                <th>Title / Token</th>
-                <th>Status</th>
-                <th>Files</th>
-                <th>Original Size</th>
-                <th>Stored Size</th>
-                <th>Created</th>
-                <th style="text-align:right;">Action</th>
-              </tr>
-            </thead>
-            <tbody id="storageTableBody">
-              <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:1.5rem;">Loading shares...</td></tr>
-            </tbody>
-          </table>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:1.25rem;">
+          <!-- Card 1: Storage & Shares Audit -->
+          <div class="panel" style="padding:1.25rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem;">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span class="mono" style="font-size:11px; color:var(--accent-cyan); font-weight:700;">[Storage Audit]</span>
+                <span id="cardShareCountBadge" class="badge badge-cyan">0 Shares</span>
+              </div>
+              <h3 style="font-size:15px; font-weight:600; margin-bottom:0.4rem;">Server Storage & Shares Audit</h3>
+              <p style="color:var(--text-muted); font-size:12px; margin:0; line-height:1.4;">
+                Audit physical chunk distribution, inspect storage quota allocations, and execute immediate cryptographic chunk scrubbing.
+              </p>
+            </div>
+            <button id="btnOpenStorageModal" class="btn btn-primary btn-sm" style="align-self:flex-start;">
+              Open Storage Audit Modal →
+            </button>
+          </div>
+
+          <!-- Card 2: User RBAC -->
+          <div class="panel" style="padding:1.25rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem;">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span class="mono" style="font-size:11px; color:var(--accent-emerald); font-weight:700;">[Access Control]</span>
+                <span id="cardUserCountBadge" class="badge badge-emerald">0 Users</span>
+              </div>
+              <h3 style="font-size:15px; font-weight:600; margin-bottom:0.4rem;">User Accounts & RBAC</h3>
+              <p style="color:var(--text-muted); font-size:12px; margin:0; line-height:1.4;">
+                Assign permissions (Admin, Member, Read-Only), isolate user share spaces, create accounts, or revoke node access.
+              </p>
+            </div>
+            <button id="btnOpenUserModal" class="btn btn-primary btn-sm" style="align-self:flex-start;">
+              Open User RBAC Modal →
+            </button>
+          </div>
+
+          <!-- Card 3: Background Node Pull -->
+          <div class="panel" style="padding:1.25rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem;">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span class="mono" style="font-size:11px; color:var(--accent-amber); font-weight:700;">[Server Sync]</span>
+                <span id="cardJobsCountBadge" class="badge badge-amber">Sync Engine</span>
+              </div>
+              <h3 style="font-size:15px; font-weight:600; margin-bottom:0.4rem;">Background Node Pull</h3>
+              <p style="color:var(--text-muted); font-size:12px; margin:0; line-height:1.4;">
+                Pull encrypted payloads directly between nodes on disk with auto-resume, bandwidth throttling, and ETA tracking.
+              </p>
+            </div>
+            <button id="btnOpenPullModal" class="btn btn-primary btn-sm" style="align-self:flex-start;">
+              Open Node Pull Modal →
+            </button>
+          </div>
+
+          <!-- Card 4: Audit Logs -->
+          <div class="panel" style="padding:1.25rem; display:flex; flex-direction:column; justify-content:space-between; gap:1rem;">
+            <div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                <span class="mono" style="font-size:11px; color:var(--accent-purple); font-weight:700;">[Audit Trail]</span>
+                <span id="cardAuditCountBadge" class="badge badge-cyan">Ledger</span>
+              </div>
+              <h3 style="font-size:15px; font-weight:600; margin-bottom:0.4rem;">Audit Logs & Telemetry</h3>
+              <p style="color:var(--text-muted); font-size:12px; margin:0; line-height:1.4;">
+                Inspect immutable ledger of transmissions, downloads, receiver authorizations, and administrative security events.
+              </p>
+            </div>
+            <button id="btnOpenAuditModal" class="btn btn-primary btn-sm" style="align-self:flex-start;">
+              Open Audit Logs Modal →
+            </button>
+          </div>
         </div>
       </section>
-
-      <!-- User & RBAC Management -->
-      <section class="panel" style="margin-bottom:1.5rem;">
-        <div class="panel-header">
-          <span class="panel-title">User Accounts & Role-Based Access Control (RBAC)</span>
-          <button id="addUserBtn" class="btn btn-sm btn-primary">+ Create User</button>
-        </div>
-        <p style="color:var(--text-muted); font-size:12px; margin-bottom:1rem;">
-          Assign permissions, isolate user shares, or revoke node access. Internal host identity is masked from non-admin accounts.
-        </p>
-
-        <div style="overflow-x:auto;">
-          <table class="file-table">
-            <thead>
-              <tr>
-                <th>Username</th>
-                <th>Display Name</th>
-                <th>Role</th>
-                <th>Status</th>
-                <th>Active Shares</th>
-                <th>Created</th>
-                <th style="text-align:right;">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="userTableBody">
-              <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:1.5rem;">Loading accounts...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <div class="grid-two">
-        <!-- Background Pull Terminal -->
-        <section class="panel">
-          <div class="panel-header">
-            <span class="panel-title">Background Node Pull</span>
-            <span class="badge badge-amber">Server-to-Server</span>
-          </div>
-          <p style="color:var(--text-muted); font-size:12px;">
-            Pull encrypted files from another SecureDrop node directly on disk. Resumes automatically if connection interrupts.
-          </p>
-
-          <div class="form-group">
-            <label>Sender Node URL</label>
-            <input id="pullBaseUrl" placeholder="http://192.168.1.50:8000" class="mono" />
-          </div>
-          <div class="form-group">
-            <label>Share Token</label>
-            <input id="pullToken" placeholder="Share token" class="mono" />
-          </div>
-          <div class="form-group">
-            <label>Share Key (#key= fragment)</label>
-            <input id="pullKey" placeholder="Decryption key from URL fragment" class="mono" />
-          </div>
-          <div class="form-group">
-            <label>Access Password (If required)</label>
-            <input id="pullPassword" type="password" placeholder="Optional" />
-          </div>
-          <button id="startPullBtn" class="btn btn-primary">Start Background Pull</button>
-
-          <!-- Active Jobs List -->
-          <div id="jobsList" style="margin-top:1rem; display:flex; flex-direction:column; gap:0.75rem;"></div>
-        </section>
-
-        <!-- Audit History -->
-        <section class="panel">
-          <div class="panel-header">
-            <span class="panel-title">Transfer Audit Log</span>
-            <button id="refreshHistoryBtn" class="btn btn-sm">Refresh</button>
-          </div>
-          <div id="historyList" style="max-height:360px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem;">
-            <div class="mono" style="color:var(--text-dim); text-align:center; padding:1.5rem;">Loading audit records...</div>
-          </div>
-        </section>
-      </div>
     </div>
   </main>
 
-  <script src="/static/common.js"></script>
-  <script src="/static/dashboard.js"></script>
+  <!-- ========================================================================= -->
+  <!-- DEDICATED MANAGEMENT MODALS (PAGINATED 25 / 100 / 200 ROWS)              -->
+  <!-- ========================================================================= -->
+
+  <!-- Modal 1: Server Storage & Shares Audit -->
+  <div id="modalStorageAudit" class="modal-overlay hidden">
+    <div class="modal-box modal-xl">
+      <div class="modal-header">
+        <div>
+          <h3>Server Storage & Shares Audit</h3>
+          <p style="font-size:12px; color:var(--text-muted); margin:2px 0 0;">Inspect raw chunk allocations and purge expired data. Zero-knowledge payloads remain end-to-end encrypted.</p>
+        </div>
+        <button class="btn btn-sm modal-close-btn" data-close="modalStorageAudit">×</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <input id="modalStorageSearch" placeholder="Search shares by title or token..." class="mono" style="max-width:280px; font-size:12px;" />
+        <div style="display:flex; gap:0.5rem;">
+          <button id="modalStorageRefreshBtn" class="btn btn-sm">Refresh</button>
+          <button id="modalStoragePurgeBtn" class="btn btn-sm btn-danger">Purge All Storage</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>Title / Token</th>
+              <th>Status</th>
+              <th>Files</th>
+              <th>Original Size</th>
+              <th>Stored Size</th>
+              <th>Created</th>
+              <th style="text-align:right;">Action</th>
+            </tr>
+          </thead>
+          <tbody id="modalStorageTableBody">
+            <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:1.5rem;">Loading shares...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="modalStoragePagination" class="pagination-bar"></div>
+    </div>
+  </div>
+
+  <!-- Modal 2: User RBAC -->
+  <div id="modalUserRbac" class="modal-overlay hidden">
+    <div class="modal-box modal-xl">
+      <div class="modal-header">
+        <div>
+          <h3>User Accounts & Role-Based Access Control (RBAC)</h3>
+          <p style="font-size:12px; color:var(--text-muted); margin:2px 0 0;">Manage member roles, permissions, and accounts across this SecureDrop node.</p>
+        </div>
+        <button class="btn btn-sm modal-close-btn" data-close="modalUserRbac">×</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <input id="modalUserSearch" placeholder="Search accounts by username or name..." class="mono" style="max-width:280px; font-size:12px;" />
+        <button id="modalAddUserBtn" class="btn btn-sm btn-primary">+ Create User</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Display Name</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th>Active Shares</th>
+              <th>Created</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="modalUserTableBody">
+            <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:1.5rem;">Loading accounts...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="modalUserPagination" class="pagination-bar"></div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Background Node Pull & Sync -->
+  <div id="modalNodePull" class="modal-overlay hidden">
+    <div class="modal-box modal-xl">
+      <div class="modal-header">
+        <div>
+          <h3>Background Node Pull & Synchronization</h3>
+          <p style="font-size:12px; color:var(--text-muted); margin:2px 0 0;">Server-to-server chunk transfers with automatic resume capability.</p>
+        </div>
+        <button class="btn btn-sm modal-close-btn" data-close="modalNodePull">×</button>
+      </div>
+      <div class="grid-two">
+        <div class="panel" style="background:var(--bg-surface); padding:1rem;">
+          <h4 style="font-size:13px; margin-bottom:0.75rem;">Launch New Node Pull</h4>
+          <div class="form-group">
+            <label>Remote Node Base URL</label>
+            <input id="modalPullBaseUrl" placeholder="http://192.168.1.50:8000" class="mono" />
+          </div>
+          <div class="form-group">
+            <label>Share Token</label>
+            <input id="modalPullToken" placeholder="Share token" class="mono" />
+          </div>
+          <div class="form-group">
+            <label>Key Fragment</label>
+            <input id="modalPullKey" placeholder="Decryption key" class="mono" />
+          </div>
+          <div class="form-group">
+            <label>Access Password</label>
+            <input id="modalPullPassword" type="password" placeholder="Optional" />
+          </div>
+          <button id="modalStartPullBtn" class="btn btn-primary" style="margin-top:0.5rem;">Start Background Pull</button>
+        </div>
+        <div class="panel" style="background:var(--bg-surface); padding:1rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <h4 style="font-size:13px; margin:0;">Active & Historical Pull Tasks</h4>
+            <button id="modalRefreshJobsBtn" class="btn btn-sm">Refresh</button>
+          </div>
+          <div id="modalJobsList" style="display:flex; flex-direction:column; gap:0.75rem; max-height:300px; overflow-y:auto;">
+            <div class="mono" style="font-size:11px; color:var(--text-dim);">Loading pull jobs...</div>
+          </div>
+          <div id="modalJobsPagination" class="pagination-bar" style="margin-top:0.5rem;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 4: Audit Logs & Telemetry -->
+  <div id="modalAuditLogs" class="modal-overlay hidden">
+    <div class="modal-box modal-xl">
+      <div class="modal-header">
+        <div>
+          <h3>Audit Logs & Security Telemetry</h3>
+          <p style="font-size:12px; color:var(--text-muted); margin:2px 0 0;">Immutable ledger of transmissions, downloads, authorizations, and administration actions.</p>
+        </div>
+        <button class="btn btn-sm modal-close-btn" data-close="modalAuditLogs">×</button>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          <label style="font-size:12px; color:var(--text-muted);">Event Type:</label>
+          <select id="modalHistoryFilterSelect" class="page-size-select">
+            <option value="all">All Events</option>
+            <option value="upload">Uploads Only</option>
+            <option value="download">Downloads Only</option>
+            <option value="system">System Only</option>
+          </select>
+        </div>
+        <button id="modalRefreshHistoryBtn" class="btn btn-sm">Refresh Logs</button>
+      </div>
+      <div id="modalHistoryList" style="max-height:420px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem;">
+        <div class="mono" style="color:var(--text-dim); text-align:center; padding:1.5rem;">Loading audit records...</div>
+      </div>
+      <div id="modalHistoryPagination" class="pagination-bar"></div>
+    </div>
+  </div>
+
+  <script src="/static/common.js?v=2.4.0"></script>
+  <script src="/static/dashboard.js?v=2.4.0"></script>
 </body>
 </html>
