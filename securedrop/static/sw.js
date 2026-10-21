@@ -1,27 +1,45 @@
-const CACHE = 'securedrop-lan-v2.3';
-const ASSETS = [
-  '/',
-  '/send',
-  '/receive',
-  '/peers',
-  '/clipboard',
-  '/static/styles.css',
-  '/static/common.js',
-  '/static/send.js',
-  '/static/receive.js',
-  '/static/share.js',
-  '/static/dashboard.js',
-  '/static/peers.js',
-  '/static/clipboard.js',
-  '/manifest.json'
-];
+// SecureDrop LAN Service Worker v3.0 (Network-First Auto-Invalidating)
+const CACHE = 'securedrop-lan-v3.0';
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).catch(() => {}));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys().then(keys => {
+      return Promise.all(
+        keys.map(key => {
+          if (key !== CACHE) {
+            return caches.delete(key);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws')) return;
-  event.respondWith(caches.match(event.request).then(cached => cached || fetch(event.request)));
+  // Bypass API and WebSockets entirely
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws')) {
+    return;
+  }
+
+  // Network-First strategy with automatic cache refresh
+  event.respondWith(
+    fetch(event.request)
+      .then(networkResponse => {
+        if (networkResponse && networkResponse.status === 200 && event.request.method === 'GET') {
+          const responseToCache = networkResponse.clone();
+          caches.open(CACHE).then(cache => {
+            cache.put(event.request, responseToCache);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        return caches.match(event.request);
+      })
+  );
 });

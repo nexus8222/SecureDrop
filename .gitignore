@@ -25,6 +25,8 @@ storage/
 
 # Logs and local files
 *.log
+*.pid
+.securedrop.pid
 *.tmp
 *.bak
 mind.md

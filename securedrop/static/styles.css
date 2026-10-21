@@ -1,19 +1,19 @@
-/* SecureDrop LAN v2.3 — Industrial Engineering System (Sidebar & Mobile-First) */
-:root {
-  --bg-void: #07090d;
-  --bg-surface: #0c1017;
-  --bg-sidebar: #0f141d;
-  --bg-panel: #141b26;
-  --bg-elevated: #1a2332;
-  --bg-hover: #222d3d;
+/* SecureDrop LAN v2.4 — Enterprise Multi-Theme Design System */
+:root, [data-theme="dark"] {
+  --bg-void: #09090b;
+  --bg-surface: #111115;
+  --bg-sidebar: #0e0e12;
+  --bg-panel: #18181c;
+  --bg-elevated: #222228;
+  --bg-hover: #27272f;
 
-  --border: #1f2a38;
+  --border: #27272a;
   --border-focus: #3b82f6;
-  --border-subtle: #17202c;
+  --border-subtle: #1e1e24;
 
-  --text-main: #f1f5f9;
-  --text-muted: #94a3b8;
-  --text-dim: #54667d;
+  --text-main: #fafafa;
+  --text-muted: #a1a1aa;
+  --text-dim: #71717a;
 
   --accent-cyan: #06b6d4;
   --accent-cyan-glow: rgba(6, 182, 212, 0.15);
@@ -24,15 +24,42 @@
   --accent-red: #ef4444;
   --accent-red-glow: rgba(239, 68, 68, 0.15);
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Menlo, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Plus Jakarta Sans", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
 
-  --sidebar-width: 250px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --sidebar-width: 240px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 
-  --transition-fast: 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  --theme-transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+}
+
+[data-theme="light"] {
+  --bg-void: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-sidebar: #f1f5f9;
+  --bg-panel: #ffffff;
+  --bg-elevated: #f8fafc;
+  --bg-hover: #e2e8f0;
+
+  --border: #e2e8f0;
+  --border-focus: #2563eb;
+  --border-subtle: #cbd5e1;
+
+  --text-main: #0f172a;
+  --text-muted: #475569;
+  --text-dim: #64748b;
+
+  --accent-cyan: #0284c7;
+  --accent-cyan-glow: rgba(2, 132, 199, 0.12);
+  --accent-amber: #d97706;
+  --accent-amber-glow: rgba(217, 119, 6, 0.12);
+  --accent-emerald: #059669;
+  --accent-emerald-glow: rgba(5, 150, 105, 0.12);
+  --accent-red: #dc2626;
+  --accent-red-glow: rgba(220, 38, 38, 0.12);
 }
 
 *, *::before, *::after {
@@ -64,6 +91,7 @@ html, body {
   min-height: 100vh;
   width: 100%;
   position: relative;
+  transition: var(--theme-transition);
 }
 
 /* Permanent Desktop Sidebar */
@@ -78,7 +106,94 @@ html, body {
   left: 0;
   bottom: 0;
   z-index: 50;
-  transition: transform var(--transition-fast);
+  transition: width 180ms cubic-bezier(0.16, 1, 0.3, 1), transform var(--transition-fast), var(--theme-transition);
+}
+
+/* Collapsed Sidebar State */
+.sidebar.collapsed {
+  width: 68px;
+}
+.app-shell.sidebar-collapsed .app-main {
+  margin-left: 68px;
+  width: calc(100% - 68px);
+}
+.sidebar.collapsed .brand-meta,
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .nav-section-title,
+.sidebar.collapsed .user-info,
+.sidebar.collapsed .node-live-status {
+  display: none !important;
+}
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding: 10px 0;
+}
+.sidebar.collapsed .nav-icon {
+  margin: 0;
+  font-size: 18px;
+}
+.sidebar.collapsed .sidebar-brand {
+  justify-content: center;
+  padding: 1rem 0;
+}
+.sidebar.collapsed .sidebar-toggle-btn {
+  margin: 0;
+}
+.sidebar.collapsed .user-card {
+  justify-content: center;
+  padding: 6px 0;
+}
+.sidebar.collapsed .sidebar-footer {
+  align-items: center;
+}
+
+.sidebar-toggle-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  margin-left: auto;
+  transition: all var(--transition-fast);
+}
+.sidebar-toggle-btn:hover {
+  color: var(--text-main);
+  border-color: var(--border-focus);
+}
+
+.theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: 100%;
+}
+.theme-toggle-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+.sidebar.collapsed .theme-toggle-btn {
+  padding: 6px;
+  width: 32px;
+  height: 32px;
+}
+.sidebar.collapsed .theme-toggle-btn span.theme-label {
+  display: none;
 }
 
 .sidebar-brand {
@@ -769,6 +884,50 @@ input:focus, select:focus, textarea:focus {
   max-width: 880px;
 }
 
+.modal-box.modal-xl {
+  max-width: 1080px;
+  width: 95vw;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.page-size-select {
+  padding: 4px 8px;
+  font-size: 11px;
+  background: var(--bg-surface);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+.resume-card {
+  border: 1px solid var(--accent-cyan);
+  background: rgba(55, 211, 255, 0.05);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -999,4 +1158,138 @@ input:focus, select:focus, textarea:focus {
     right: 1rem;
     left: 1rem;
   }
+}
+
+/* Modern Header Bar */
+.desktop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 1.5rem;
+}
+.header-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Metric Statistics Grid */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.stat-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  transition: border-color var(--transition-fast), var(--theme-transition);
+}
+.stat-card:hover {
+  border-color: var(--border-focus);
+}
+.stat-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.stat-num {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.stat-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Search and Filter Toolbars */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.search-box {
+  position: relative;
+  min-width: 260px;
+}
+.search-box input {
+  width: 100%;
+  padding-left: 2.2rem;
+}
+.search-icon {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+  pointer-events: none;
+  font-size: 13px;
+}
+
+/* Tab filter button pills */
+.pill-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  min-height: 28px;
+}
+.pill-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+.pill-btn.active {
+  background: var(--text-main);
+  color: var(--bg-void);
+  border-color: var(--text-main);
+}
+
+/* High-contrast Mono PIN Pill */
+.pin-pill {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--accent-cyan);
+  background: var(--accent-cyan-glow);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
