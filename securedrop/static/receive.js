@@ -9,6 +9,17 @@
     await Common.initNavigation('receive');
     setupPinInputs();
     setupLinkInput();
+    setupStateTracking();
+  }
+
+  function setupStateTracking() {
+    Common.autoTrack('receive', [
+      { id: 'p1', key: 'p1', type: 'text' },
+      { id: 'p2', key: 'p2', type: 'text' },
+      { id: 'p3', key: 'p3', type: 'text' },
+      { id: 'p4', key: 'p4', type: 'text' },
+      { id: 'linkInput', key: 'link', type: 'text' }
+    ]);
   }
 
   function setupPinInputs() {
@@ -75,7 +86,8 @@
       status.textContent = `Found share "${res.title}". Loading...`;
       Common.toast(`Connected to share: ${res.title}`, 'success');
       setTimeout(() => {
-        window.location.href = `/share/${res.token}`;
+        const keyFragment = res.key ? `#key=${encodeURIComponent(res.key)}` : '';
+        window.location.href = `/share/${res.token}${keyFragment}`;
       }, 400);
     } catch (e) {
       status.textContent = `PIN not found or share expired`;

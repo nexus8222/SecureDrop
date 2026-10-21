@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hosted Shares — SecureDrop LAN</title>
+  <link rel="stylesheet" href="/static/styles.css?v=2.4.0" />
+</head>
+<body>
+  <main class="page-wrapper">
+    <!-- Header Summary Block -->
+    <div class="page-header" style="margin-bottom: 1.5rem;">
+      <div>
+        <h1 class="page-title">Hosted Shares Dashboard</h1>
+        <p class="page-subtitle">Inspect active distributions, verify download quotas, and revoke/purge payloads with one click.</p>
+      </div>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <span class="badge badge-emerald">Zero-Knowledge Storage</span>
+        <a href="/send" class="btn btn-primary btn-sm">+ Deploy New Payload</a>
+      </div>
+    </div>
+
+    <!-- Live Metrics Grid -->
+    <div class="stat-grid">
+      <div class="stat-card">
+        <span class="stat-label">Active Payloads</span>
+        <div id="statShareCount" class="stat-num">0</div>
+        <span class="stat-sub">Distributions on this node</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Stored Volume</span>
+        <div id="statTotalSize" class="stat-num">0 B</div>
+        <span class="stat-sub">Encrypted chunks on disk</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Delivered Transfers</span>
+        <div id="statDownloads" class="stat-num">0</div>
+        <span class="stat-sub">Completed downloads served</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Purge Policy</span>
+        <div class="stat-num" style="font-size:18px; color:var(--accent-amber); display:flex; align-items:center; gap:6px;">
+          <span>● Auto-Scrub</span>
+        </div>
+        <span class="stat-sub">Chunks deleted on expire/burn</span>
+      </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="filter-bar">
+      <div class="filter-group">
+        <div class="search-box">
+          <span class="search-icon">⌕</span>
+          <input id="shareSearchInput" type="text" placeholder="Search by title, PIN, or token..." />
+        </div>
+        <button class="pill-btn active" data-filter="all">All Payloads</button>
+        <button class="pill-btn" data-filter="files">Files Only</button>
+        <button class="pill-btn" data-filter="clipboard">Clipboard Snippets</button>
+      </div>
+      <div class="filter-group">
+        <button id="refreshSharesBtn" class="btn btn-sm">Refresh</button>
+      </div>
+    </div>
+
+    <!-- Main Shares Data Table Panel -->
+    <div class="panel" style="padding: 0; overflow: hidden;">
+      <div style="overflow-x:auto;">
+        <table class="file-table" style="margin: 0;">
+          <thead>
+            <tr>
+              <th>Payload & Token</th>
+              <th>Mode</th>
+              <th>Quick PIN</th>
+              <th>Size / Chunks</th>
+              <th>Downloads</th>
+              <th>Expiration</th>
+              <th>Protection</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="sharesTableBody">
+            <tr>
+              <td colspan="8" style="text-align:center; padding:3rem 1rem; color:var(--text-dim);">
+                <div class="mono">Scanning hosted shares...</div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/common.js?v=2.4.0"></script>
+  <script src="/static/shares.js?v=2.4.0"></script>
+</body>
+</html>

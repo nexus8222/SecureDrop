@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Download Share — SecureDrop LAN</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=2.4.0" />
 </head>
 <body>
   <nav class="top-nav"></nav>
@@ -79,6 +79,15 @@
         <div id="chunkMatrix" class="chunk-matrix"></div>
       </div>
     </div>
+
+    <!-- Clipboard Snippet Panel -->
+    <div id="clipboardPanel" class="panel hidden">
+      <div class="panel-header">
+        <span class="panel-title">Clipboard Snippet</span>
+        <button id="copyClipboardBtn" class="btn btn-primary btn-sm">Copy Snippet</button>
+      </div>
+      <pre id="clipboardContent" class="mono" style="background:var(--bg-void); padding:1rem; border-radius:var(--radius-sm); max-height:60vh; overflow:auto; white-space:pre-wrap; word-break:break-all; margin:0; line-height:1.6;"></pre>
+    </div>
   </main>
 
   <!-- Rich Media & Code Preview Lightbox Modal -->
@@ -97,7 +106,7 @@
     </div>
   </div>
 
-  <script src="/static/common.js"></script>
-  <script src="/static/share.js"></script>
+  <script src="/static/common.js?v=2.4.0"></script>
+  <script src="/static/share.js?v=2.4.0"></script>
 </body>
 </html>

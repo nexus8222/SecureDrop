@@ -16,6 +16,108 @@
     updateCryptoBadge();
     setupDropzone();
     setupControls();
+    setupStateTracking();
+    checkRestoredUpload();
+  }
+
+  async function checkRestoredUpload() {
+    const active = Common.getActiveUpload();
+    if (!active) return;
+
+    if (active.status === 'completed') {
+      renderCompletedView(active);
+    } else if (active.status === 'uploading' && active.token) {
+      try {
+        const check = await fetch(`/api/shares/${active.token}`, {
+          headers: active.uploadToken ? { 'x-upload-token': active.uploadToken } : {}
+        });
+        if (check.ok) {
+          renderInterruptedCard(active);
+        } else {
+          Common.clearActiveUpload();
+        }
+      } catch {
+        // Network offline
+      }
+    }
+  }
+
+  function renderCompletedView(data) {
+    el('pinDisplay').textContent = data.pin;
+    el('shareLinkInput').value = data.shareUrl;
+    el('qrImage').src = `/api/shares/${data.token}/qr?key=${encodeURIComponent(data.rawB64 || '')}`;
+    el('curlInput').value = data.curlCmd || '';
+
+    el('copyPinBtn').onclick = () => Common.copyText(data.pin);
+    el('copyLinkBtn').onclick = () => Common.copyText(data.shareUrl);
+    el('copyCurlBtn').onclick = () => Common.copyText(data.curlCmd || '');
+
+    let resetBtn = el('sendAnotherBtn');
+    if (!resetBtn) {
+      resetBtn = document.createElement('button');
+      resetBtn.id = 'sendAnotherBtn';
+      resetBtn.className = 'btn btn-secondary';
+      resetBtn.style.marginTop = '1rem';
+      resetBtn.textContent = 'Upload Another File';
+      resetBtn.onclick = () => {
+        Common.clearActiveUpload();
+        el('outputContainer').classList.add('hidden');
+      };
+      el('outputContainer').appendChild(resetBtn);
+    }
+
+    el('outputContainer').classList.remove('hidden');
+  }
+
+  function renderInterruptedCard(active) {
+    let card = el('interruptedUploadCard');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'interruptedUploadCard';
+      card.className = 'resume-card';
+      const mainWrapper = document.querySelector('.page-wrapper') || document.querySelector('main');
+      const grid = document.querySelector('.split-layout') || mainWrapper.children[1];
+      grid.parentNode.insertBefore(card, grid);
+    }
+
+    const pct = active.totalChunks > 0 ? ((active.completedChunks / active.totalChunks) * 100).toFixed(0) : 0;
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div style="font-weight:600; color:var(--text-main); font-size:14px;">
+          <span style="color:var(--accent-cyan); margin-right:6px;">[Interrupted Upload Detected]</span> ${Common.escapeHtml(active.title || 'Untitled Share')}
+        </div>
+        <span class="badge badge-amber">${pct}% Completed</span>
+      </div>
+      <div style="font-size:12px; color:var(--text-muted);">
+        A previous upload was interrupted during refresh (${active.completedChunks}/${active.totalChunks} chunks uploaded).
+      </div>
+      <div style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+        <button id="discardInterruptedBtn" class="btn btn-sm btn-danger">Discard & Scrub</button>
+      </div>
+    `;
+
+    el('discardInterruptedBtn').onclick = async () => {
+      try {
+        await Common.api(`/api/shares/${active.token}`, {
+          method: 'DELETE',
+          headers: active.uploadToken ? { 'x-upload-token': active.uploadToken } : {}
+        });
+      } catch {}
+      Common.clearActiveUpload();
+      card.remove();
+      Common.toast('Interrupted share discarded and scrubbed', 'info');
+    };
+  }
+
+  function setupStateTracking() {
+    Common.autoTrack('send', [
+      { id: 'shareTitle', key: 'title', type: 'text' },
+      { id: 'expiresSelect', key: 'expires', type: 'select' },
+      { id: 'maxDownloads', key: 'maxDownloads', type: 'number' },
+      { id: 'sharePassword', key: 'password', type: 'password' },
+      { id: 'requireApproval', key: 'approval', type: 'checkbox' },
+      { id: 'deleteAfter', key: 'deleteAfter', type: 'checkbox' }
+    ]);
   }
 
   function updateCryptoBadge() {
@@ -185,6 +287,7 @@
         require_approval: requireApproval,
         delete_after_download: deleteAfter,
         max_downloads: maxDownloads,
+        key: rawB64,
         meta: {
           encryption_mode: clientCrypto ? 'browser-aes-gcm' : 'server-aes-gcm-compat',
           client_crypto: clientCrypto,
@@ -194,6 +297,7 @@
 
     const token = shareRes.token;
     const pin = shareRes.pin || '----';
+    const uploadToken = shareRes.upload_token || '';
 
     // 2. Build Chunk Matrix Grid
     const matrixBox = el('chunkMatrix');
@@ -218,6 +322,21 @@
     el('telemetryStatus').textContent = 'Transmitting';
     el('telemetryStatus').className = 'badge badge-cyan';
 
+    Common.saveActiveUpload({
+      token,
+      uploadToken,
+      pin,
+      rawB64,
+      title,
+      totalBytes,
+      totalChunks,
+      clientCrypto,
+      completedChunks: 0,
+      completedBytes: 0,
+      status: 'uploading',
+      time: Date.now()
+    });
+
     let completedBytes = 0;
     let completedChunks = 0;
     const startTime = performance.now();
@@ -234,7 +353,10 @@
       // Register file manifest on backend
       await Common.api(`/api/shares/${token}/files`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(uploadToken ? { 'x-upload-token': uploadToken } : {})
+        },
         body: JSON.stringify({
           id: fileId,
           name: f.name,
@@ -259,10 +381,11 @@
 
           const slice = f.slice(cIdx * CHUNK_SIZE, Math.min(f.size, (cIdx + 1) * CHUNK_SIZE));
           const plainBuf = await slice.arrayBuffer();
-          const plainSha = await Common.sha256Hex(plainBuf);
+          const [encrypted, plainSha] = clientCrypto
+            ? await Promise.all([Common.encryptChunk(key, plainBuf), Common.sha256Hex(plainBuf)])
+            : [null, await Common.sha256Hex(plainBuf)];
 
           if (clientCrypto) {
-            const encrypted = await Common.encryptChunk(key, plainBuf);
             const cipherSha = await Common.sha256Hex(encrypted.payload);
             const metaObj = {
               plaintext_sha256: plainSha,
@@ -273,15 +396,19 @@
             };
             const metaHeader = btoa(JSON.stringify(metaObj));
 
+            const headers = { 'x-chunk-meta': metaHeader };
+            if (uploadToken) headers['x-upload-token'] = uploadToken;
+
             const resp = await fetch(`/api/shares/${token}/files/${fileId}/chunks/${cIdx}`, {
               method: 'PUT',
-              headers: { 'x-chunk-meta': metaHeader },
+              headers,
               body: encrypted.payload
             });
             if (!resp.ok) throw new Error(`Chunk ${cIdx} rejected: ${await resp.text()}`);
           } else {
             const headers = {};
             if (plainSha) headers['x-plaintext-sha256'] = plainSha;
+            if (uploadToken) headers['x-upload-token'] = uploadToken;
             const resp = await fetch(`/api/shares/${token}/files/${fileId}/chunks/${cIdx}/plain`, {
               method: 'PUT',
               headers,
@@ -328,12 +455,67 @@
     el('shareLinkInput').value = shareUrl;
     el('qrImage').src = `/api/shares/${token}/qr?key=${encodeURIComponent(rawB64)}`;
 
-    const curlCmd = `curl -OJ "${location.origin}/api/shares/${token}/zip${clientCrypto ? `?key=${rawB64}` : ''}"`;
+    const curlCmd = `curl -OJ "${location.origin}/api/shares/${token}/zip${rawB64 && rawB64 !== 'server' ? `?key=${encodeURIComponent(rawB64)}` : ''}"`;
     el('curlInput').value = curlCmd;
+
+    // Save to local hosted shares tracker & clear form draft
+    Common.addHostedShare({
+      token,
+      pin,
+      title,
+      mode: 'files',
+      file_count: state.files.length,
+      total_size: totalBytes,
+      created_at: Math.floor(Date.now() / 1000),
+      expires_at: expiresSeconds ? Math.floor(Date.now() / 1000) + expiresSeconds : null,
+      max_downloads: maxDownloads,
+      delete_after_download: deleteAfter,
+      upload_token: uploadToken,
+      key: rawB64
+    });
+    Common.clearDraft('send');
+
+    // Save to active upload with status: 'completed'
+    Common.saveActiveUpload({
+      token,
+      uploadToken,
+      pin,
+      rawB64,
+      title,
+      totalBytes,
+      totalChunks,
+      clientCrypto,
+      completedChunks: totalChunks,
+      completedBytes: totalBytes,
+      shareUrl,
+      curlCmd,
+      status: 'completed',
+      time: Date.now()
+    });
+
+    // Clear form inputs and draft completely so no data sticks
+    if (el('shareTitle')) el('shareTitle').value = '';
+    state.files = [];
+    renderFileList();
+    Common.clearDraft('send');
 
     el('copyPinBtn').onclick = () => Common.copyText(pin);
     el('copyLinkBtn').onclick = () => Common.copyText(shareUrl);
     el('copyCurlBtn').onclick = () => Common.copyText(curlCmd);
+
+    let resetBtn = el('sendAnotherBtn');
+    if (!resetBtn) {
+      resetBtn = document.createElement('button');
+      resetBtn.id = 'sendAnotherBtn';
+      resetBtn.className = 'btn btn-secondary';
+      resetBtn.style.marginTop = '1rem';
+      resetBtn.textContent = 'Upload Another File';
+      resetBtn.onclick = () => {
+        Common.clearActiveUpload();
+        el('outputContainer').classList.add('hidden');
+      };
+      el('outputContainer').appendChild(resetBtn);
+    }
 
     el('outputContainer').classList.remove('hidden');
     Common.toast('Payload transmission verified and ready!', 'success', 5000);

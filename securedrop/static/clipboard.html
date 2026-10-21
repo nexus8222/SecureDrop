@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Clipboard & Snippets — SecureDrop LAN</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=2.4.0" />
 </head>
 <body>
   <nav class="top-nav"></nav>
@@ -58,6 +58,14 @@
       </div>
 
       <div class="form-group">
+        <label>4-Digit Quick PIN (LAN / Mobile)</label>
+        <div class="input-row">
+          <div id="clipPinDisplay" class="mono pin-box" style="font-size:24px; font-weight:700; letter-spacing:0.25rem; color:var(--accent-cyan); padding:0.4rem 1rem; background:var(--bg-void); border:1px solid var(--border-subtle); border-radius:var(--radius-sm);">----</div>
+          <button id="copyClipPinBtn" class="btn btn-sm">Copy PIN</button>
+        </div>
+      </div>
+
+      <div class="form-group">
         <label>Share URL</label>
         <div class="input-row">
           <input id="clipUrlInput" class="mono" readonly />
@@ -75,7 +83,7 @@
     </div>
   </main>
 
-  <script src="/static/common.js"></script>
-  <script src="/static/clipboard.js"></script>
+  <script src="/static/common.js?v=2.4.0"></script>
+  <script src="/static/clipboard.js?v=2.4.0"></script>
 </body>
 </html>

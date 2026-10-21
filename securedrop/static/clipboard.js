@@ -8,6 +8,15 @@
   async function init() {
     await Common.initNavigation('clipboard');
     setupEditor();
+    setupStateTracking();
+  }
+
+  function setupStateTracking() {
+    Common.autoTrack('clipboard', [
+      { id: 'clipText', key: 'text', type: 'text' },
+      { id: 'clipExpiry', key: 'expires', type: 'select' },
+      { id: 'clipPassword', key: 'password', type: 'password' }
+    ]);
   }
 
   function setupEditor() {
@@ -24,6 +33,7 @@
       textEl.value = '';
       countEl.textContent = '0 Characters';
       el('clipOutput').classList.add('hidden');
+      Common.clearDraft('clipboard');
     };
 
     el('publishClipBtn').onclick = async () => {
@@ -46,15 +56,31 @@
 
         const cid = res.clipboard_id;
         const token = res.token;
+        const pin = res.pin || '----';
         const shareUrl = `${location.origin}/share/${token}`;
         const curlCmd = `curl -s "${location.origin}/api/clipboard/${cid}" | python3 -c "import sys,json; print(json.load(sys.stdin)['text'])"`;
 
         el('clipIdBadge').textContent = cid;
+        if (el('clipPinDisplay')) el('clipPinDisplay').textContent = pin;
         el('clipUrlInput').value = shareUrl;
         el('clipCurlInput').value = curlCmd;
 
+        if (el('copyClipPinBtn')) el('copyClipPinBtn').onclick = () => Common.copyText(pin);
         el('copyClipUrlBtn').onclick = () => Common.copyText(shareUrl);
         el('copyClipCurlBtn').onclick = () => Common.copyText(curlCmd);
+
+        Common.addHostedShare({
+          token,
+          pin,
+          title: text.slice(0, 32).trim() || 'Clipboard Snippet',
+          mode: 'clipboard',
+          clipboard_id: cid,
+          total_size: text.length,
+          created_at: Math.floor(Date.now() / 1000),
+          expires_at: expiresSeconds ? Math.floor(Date.now() / 1000) + expiresSeconds : null,
+          upload_token: res.upload_token || ''
+        });
+        Common.clearDraft('clipboard');
 
         el('clipOutput').classList.remove('hidden');
         Common.toast('Clipboard snippet published on LAN', 'success');

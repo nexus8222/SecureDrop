@@ -49,6 +49,13 @@
         loadShareMetadata(true);
       }
     });
+    setTimeout(() => {
+      try {
+        if (Common.state?.ws?.readyState === WebSocket.OPEN && state.token) {
+          Common.state.ws.send(JSON.stringify({ type: 'subscribe', share_token: state.token }));
+        }
+      } catch {}
+    }, 500);
   }
 
   async function loadShareMetadata(silent = false) {
@@ -122,8 +129,28 @@
 
   function renderUnlocked(meta) {
     el('shareTitle').textContent = meta.title || 'Secure Share';
-    const totalBytes = (meta.files || []).reduce((a, f) => a + Number(f.size || 0), 0);
     const expiresText = meta.expires_at ? `Expires ${new Date(meta.expires_at * 1000).toLocaleTimeString()}` : 'Never expires';
+
+    if (meta.mode === 'clipboard') {
+      el('contentPanel').classList.add('hidden');
+      el('clipboardPanel').classList.remove('hidden');
+      el('readyBadge').textContent = 'Clipboard Ready';
+      el('readyBadge').className = 'badge badge-emerald';
+
+      const content = meta.meta?.content || meta.content || '';
+      el('shareMeta').textContent = `Clipboard Snippet · ${Common.fmtBytes(content.length)} · ${expiresText}`;
+      el('clipboardContent').textContent = content;
+      el('copyClipboardBtn').onclick = () => {
+        Common.copyText(content);
+        fetch(`/api/shares/${state.token}/download-complete`, { method: 'POST' }).catch(() => {});
+      };
+      return;
+    }
+
+    el('clipboardPanel').classList.add('hidden');
+    el('contentPanel').classList.remove('hidden');
+
+    const totalBytes = (meta.files || []).reduce((a, f) => a + Number(f.size || 0), 0);
     el('shareMeta').textContent = `${(meta.files || []).length} Files · ${Common.fmtBytes(totalBytes)} · ${expiresText}`;
 
     const isReady = (meta.files || []).length > 0 && (meta.files || []).every(f => f.uploaded_chunks >= f.chunk_count);
@@ -230,7 +257,9 @@
       body.innerHTML = `<iframe src="${previewUrl}" style="width:100%; height:75vh; border:none; border-radius:var(--radius-sm);"></iframe>`;
     } else if (mime.startsWith('text/') || ['txt', 'md', 'json', 'js', 'py', 'html', 'css', 'csv', 'log', 'xml', 'yaml', 'yml'].includes(ext)) {
       try {
-        const text = await fetch(previewUrl).then(r => r.text());
+        const resp = await fetch(previewUrl);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
         body.innerHTML = `<pre class="mono" style="background:var(--bg-void); padding:1rem; border-radius:var(--radius-sm); max-height:70vh; width:100%; overflow:auto; font-size:12px; line-height:1.6; color:#a7f3d0; text-align:left;"><code>${Common.escapeHtml(text)}</code></pre>`;
         copyBtn.classList.remove('hidden');
         copyBtn.onclick = () => Common.copyText(text);
@@ -240,7 +269,7 @@
     } else {
       body.innerHTML = `
         <div style="text-align:center; padding:2rem;">
-          <div style="font-size:36px; margin-bottom:0.5rem; color:var(--text-dim);">📦</div>
+          <div style="font-size:24px; margin-bottom:0.5rem; color:var(--text-dim); font-family:var(--font-mono);">[File Payload]</div>
           <p style="color:var(--text-muted); margin-bottom:1rem;">Inline preview not available for this file type (${ext || 'binary'}).</p>
           <a href="${previewUrl}" class="btn btn-primary" download="${Common.escapeAttr(file.name)}">Download File</a>
         </div>
