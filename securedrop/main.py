@@ -1089,8 +1089,10 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    if request.url.path == "/sw.js":
+    if request.url.path in ("/", "/send", "/receive", "/inbox", "/shares", "/rooms", "/radar", "/peers", "/clipboard", "/gallery", "/admin", "/dashboard", "/sw.js"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     elif request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
@@ -1563,9 +1565,14 @@ DIST_INDEX = STATIC_DIR / "dist" / "index.html"
 
 
 def serve_spa() -> FileResponse:
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
     if DIST_INDEX.exists():
-        return FileResponse(DIST_INDEX)
-    return FileResponse(STATIC_DIR / "send.html")
+        return FileResponse(DIST_INDEX, headers=headers)
+    return FileResponse(STATIC_DIR / "send.html", headers=headers)
 
 
 @app.get("/", response_class=HTMLResponse)

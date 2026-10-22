@@ -1,5 +1,5 @@
-// SecureDrop LAN Service Worker v3.0 (Network-First Auto-Invalidating)
-const CACHE = 'securedrop-lan-v3.0';
+// SecureDrop LAN Service Worker v3.1 (Network-First Auto-Invalidating)
+const CACHE = 'securedrop-lan-v3.1-flush';
 
 self.addEventListener('install', event => {
   self.skipWaiting();
