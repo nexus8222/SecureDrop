@@ -1,29 +1,52 @@
-# SecureDrop LAN Enterprise v2.4
+# SecureDrop LAN Enterprise v2.5
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-brightgreen.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/Framework-FastAPI-009688.svg)](https://fastapi.tiangolo.com/)
+[![React 18](https://img.shields.io/badge/Frontend-React%2018%20%2B%20Vite%20%2B%20Tailwind-61dafb.svg)](https://react.dev/)
 [![SQLite WAL](https://img.shields.io/badge/Database-SQLite%20WAL-003B57.svg)](https://www.sqlite.org/wal.html)
 [![AES-GCM 256](https://img.shields.io/badge/Cryptography-AES--GCM%20256-success.svg)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
 
-**SecureDrop LAN** is a zero-cloud local network file exchange, streaming, and clipboard synchronization platform engineered for high-security intranet deployments. It enables machines across the same Wi-Fi or wired network to transfer multi-gigabyte payloads at line speed (10Gbps+ capable) without third-party cloud infrastructure, internet connectivity, or client installations.
+**SecureDrop LAN Enterprise** is a high-performance local network file exchange, live collaborative drop-box, and secure communication hub engineered for air-gapped intranet deployments. It enables nodes across the same Wi-Fi or wired network to transfer multi-gigabyte payloads at line speed (10Gbps+ capable) without third-party cloud infrastructure, external internet connectivity, or client installations.
 
 ---
 
-## Highlights & Capabilities
+## ⚡ Highlights & Key Features (v2.5 Enterprise)
 
-- **Modular Multi-Paged Terminal Architecture:** Clean, dedicated operational routes (`/send`, `/receive`, `/shares`, `/clipboard`, `/peers`, `/admin`) built with responsive desktop header navigation, mobile bottom navigation, and collapsible sidebar controls.
-- **Layered Hardware AES-GCM Encryption:** Chunk encryption keys are derived from a composite triad via BLAKE2b:
-  $$\text{Key} = \text{BLAKE2b}\Big(\text{temp\_access\_key} \,\|\, \text{user\_pass\_hash} \,\|\, \text{random\_secure\_salt}\Big) \pmod{256\text{-bit}}$$
-  Raw chunks stored on disk are mathematically undecryptable even if physical storage media is compromised, while OpenSSL hardware AES-NI instructions maintain multi-gigabit throughput.
-- **Client State Tracking & Interrupted Upload Recovery:** Active uploads and drafts are tracked locally across browser reloads. Interrupted transmissions prompt one-click resumption from the exact chunk offset, and completed shares retain their links, PINs, and QR codes without blowing away upon refresh.
-- **Strict User Session Isolation:** Storage keys and drafts are strictly scoped to authenticated user IDs (`sd_draft_u_<id>`), guaranteeing zero data leakage (such as file titles or snippets) across account transitions.
-- **Hosted Shares Terminal (`/shares`):** Dedicated creator dashboard with live countdown timers, download capacity progress, 1-click PIN/link copying, and immediate self-service revocation.
-- **Immediate Physical Chunk Scrubbing:** 1-time burn-after-reading shares and expired files have their `.chunk` files physically wiped from disk immediately upon download or expiration. An automated 15-second background sweep ensures zero lingering files.
-- **Enterprise Admin Cockpit with Dedicated Modals:** High-performance dashboard featuring 4 focused, paginated modals (Storage Audit, User RBAC, Background Node Pull, and Security Audit Logs) with database-level `LIMIT 25` queries and 100/200 row options.
-- **Production Service Controller (`start.sh`):** Comprehensive bash controller providing background daemon launch, live status inspection, `tail -f` log streaming, graceful restarts, auto-restart crash supervisor, and persistent `systemd --user` auto-start on boot.
-- **Dynamic On-the-Fly ZIP Streaming & RFC 7233:** In-flight streaming directory downloads with data descriptors (`0x0008`) and byte-range streaming (`206 Partial Content`) for immediate media scrubbing without server memory buffering.
-- **Zero-Emoji Industrial Design System:** Clean typographic glyphs, geometric symbols, and vector SVG door indicators replacing all pictorial emoji fonts across themes.
+1. **Modern React + Vite + Tailwind SPA Frontend:**
+   - Single-page application featuring dark/light modes, collapsible navigation sidebar, zero emojis, and crisp SVG symbols (including door logout).
+   - Instant client-side state preservation and transfer recovery.
+2. **Multi-Peer Collaborative Live Rooms (Drop-Boxes):**
+   - Live drop-box spaces (`/rooms`) where peers concurrently drop, view, and retrieve files with real-time WebSocket feeds.
+3. **Direct & Group Sharing:**
+   - Share directly with collaborative groups or search team members by username with multi-select distribution.
+   - Incoming payloads delivered directly to dedicated **Direct Shares Inbox** (`/inbox`).
+4. **Resumable Chunk Engine & Checkpoints:**
+   - Multi-worker concurrent chunk uploader with exponential backoff retry.
+   - Endpoint `/api/shares/{token}/chunks-status` queries received chunks; browser reloads resume transfers seamlessly without re-uploading completed chunks.
+5. **Multicast UDP Discovery Upgrade (`239.255.45.67:45678`):**
+   - Zero-config IGMP multicast with structured network-interface binding across all non-loopback interfaces and broadcast fallback.
+   - Unrestricted LAN peer radar open to all users and guests.
+6. **Goofy Persistent Guest Usernames & Encryption:**
+   - Automatically provisions humorous, unique guest usernames (e.g. `VelvetOtter_314`, `NeonCapybara_775`) persisted in browser cookies.
+   - Full WebCrypto AES-GCM 256 client encryption for guests.
+7. **Directional Clipboard Push & Ephemeral LAN Chat:**
+   - Push clipboard text directly into a target peer's clipboard history over the local mesh.
+   - Ephemeral chat drawer for coordination and one-time credentials.
+8. **Automated Linux Host Watch-Folder (`securedrop/watch/`):**
+   - Background daemon monitoring `securedrop/watch/`, automatically chunking, encrypting, and converting dropped files into active shares with PINs and QR codes.
+9. **Hard Storage Allocation Quotas (RBAC):**
+   - Enforced storage ceilings: Members (50 GB), Guests (2 GB), Admins (Unlimited).
+   - Displayed with live real-time storage gauges in the top navigation bar.
+10. **Device Authentication Handshake (SAS PIN):**
+    - Short Authentication String 4-digit PIN cryptographic pairing between network devices.
+11. **Structured JSON Manifest Pre-Flight:**
+    - Manifest payload exchanged before streaming, allowing receivers to inspect file names, directories, MIME types, and sizes.
+12. **Media Slideshow & Audio Playlist Mode:**
+    - Image lightbox with auto-advancing slideshow.
+    - Continuous audio player and RFC 7233 byte-range video streaming.
+13. **Enterprise Admin Cockpit with 4 Paginated Modals:**
+    - Server Storage Audit, User RBAC Governance, Background Node Pulls, and Security Audit Logs with 25 / 100 / 200 row database pagination.
 
 ---
 
@@ -33,26 +56,27 @@
                  +---------------------------------------------------+
                  |                 Local Network (LAN)               |
                  +---------------------------------------------------+
-                                      |
-                +---------------------+---------------------+
-                |                                           |
-       [Host SecureDrop Node]                        [Remote Browser]
- +-------------------------------+             +-------------------------+
- | FastAPI Web Core (TCP :8000)  |<--- HTTP ---| Web Browser / Mobile    |
- | - Multi-Page HTML/JS Engine   |<--- WSS ----| - Clean Typography UI   |
- | - Resumable Chunk Controller  |             | - State Tracking Engine |
- | - Layered BLAKE2b AES-GCM     |             | - Web Crypto AES-GCM    |
- | - Database Pagination Engine  |             | - 4-Digit Quick PIN     |
- | - Proactive 15s Chunk Reaper  |             | - Media Lightbox Scrub  |
- |                               |             +-------------------------+
- | TCP Chunk Server (TCP :9001)  |<--- TCP ----+ [Peer SecureDrop Node]
- | - Socket streaming & TCP_NODELAY            | - Disk-to-disk node sync|
- |                               |             +-------------------------+
- | UDP Discovery (UDP :45678)    |<--- UDP ----+ [LAN Node Broadcast]
- | - Node heartbeats & discovery |
- |                               |
+                                       |
+                +----------------------+----------------------+
+                |                                             |
+       [Host SecureDrop Node]                          [Remote Device]
+ +-------------------------------+              +----------------------------+
+ | FastAPI Web Core (TCP :8000)  |<--- HTTP ----| React 18 + Vite SPA        |
+ | - React SPA Dist Bundle       |<--- WSS -----| - Send, Receive, Inbox     |
+ | - Resumable Chunk Controller  |              | - Live Rooms Drop-Boxes    |
+ | - Layered BLAKE2b AES-GCM     |              | - LAN Radar & Chat Overlay |
+ | - Groups & Direct Shares      |              | - State Checkpoint Engine  |
+ | - Watch-Folder Daemon         |              | - WebCrypto E2EE 256-bit   |
+ | - Proactive 15s Chunk Reaper  |              | - 4-Digit Quick PIN        |
+ |                               |              | - Screen WakeLock API      |
+ | TCP Chunk Server (TCP :9001)  |<--- TCP -----+----------------------------+
+ | - Socket streaming & NODELAY  |
+ |                               |              +----------------------------+
+ | UDP Discovery (239.255.45.67) |<-- Multicast-+ [Peer SecureDrop Nodes]    |
+ | - IGMP interface-bound radar  |              | - Ephemeral mesh discovery |
+ |                               |              +----------------------------+
  | Storage Engine (SQLite WAL)   |
- | - Mapped I/O & Memory Cache   |
+ | - Hard Quotas: 50GB / 2GB     |
  +-------------------------------+
 ```
 
@@ -60,13 +84,11 @@
 
 ## 🔐 Security & Access Control (RBAC)
 
-SecureDrop LAN implements strict Role-Based Access Control to enforce least-privilege principles:
-
-| Role | Access Scope | Capabilities & Privacy Boundaries |
+| Role | Storage Ceiling | Capabilities & Privacy Boundaries |
 |---|---|---|
-| **Admin** | Node Authority | Hardware telemetry, user account provisioning, access approvals, storage purging, and audit logs. Admin views display `[Audit Only]` badges and cannot decrypt or tamper with isolated zero-knowledge user payloads. |
-| **Member** | Authenticated User | Chunked file upload, 4-digit PIN generation, private clipboard notes, hosted shares dashboard, and self-service revocation of owned shares. |
-| **Guest** | Anonymous Visitor | Quick PIN receiver (`/receive`), direct file downloads, media lightbox preview, and anonymous file submission. Host OS identity and internal paths are strictly redacted. |
+| **Admin** | Unlimited | Hardware telemetry, user account provisioning, access approvals, storage purging, and audit logs. Admin views display `[Audit Only]` badges and cannot decrypt isolated zero-knowledge user payloads. |
+| **Member** | 50 GB Active | Chunked file upload, direct group sharing, user search distribution, collaborative live rooms, and hosted shares revocation. |
+| **Guest** | 2 GB Temporary | Goofy persistent username (`VelvetOtter_314`), quick PIN receiver (`/receive`), client E2EE encryption, live rooms drop-box participation, and direct shares inbox. |
 
 ---
 
@@ -79,13 +101,14 @@ SecureDrop LAN implements strict Role-Based Access Control to enforce least-priv
 git clone git@github.com:nexus8222/SecureDrop.git
 cd SecureDrop
 
-# Install dependencies
+# Install Python backend dependencies
 python3 -m pip install -r requirements.txt
+
+# (Optional) Build React frontend (pre-built bundle included in securedrop/static/dist)
+cd frontend && npm install && npm run build && cd ..
 ```
 
 ### 2. Service Management with `start.sh`
-
-SecureDrop includes an enterprise bash controller:
 
 ```bash
 # Start server in background (daemon mode)
@@ -102,15 +125,6 @@ SecureDrop includes an enterprise bash controller:
 
 # Gracefully stop server
 ./start.sh stop
-
-# Start in foreground for debugging
-./start.sh -f
-
-# Run supervisor daemon with automatic crash recovery
-./start.sh auto-restart
-
-# Install and enable systemd user auto-start service on boot
-./start.sh --install-service
 ```
 
 ### 3. Accessing the Web Interface
@@ -120,73 +134,38 @@ SecureDrop includes an enterprise bash controller:
 
 ---
 
-## ⚙️ Configuration (`.env`)
-
-Configuration is managed via environment variables or a local `.env` file:
-
-```bash
-SECUREDROP_ADMIN_PASSWORD=change-this-password
-SECUREDROP_DEVICE_NAME=SecureDrop-LAN
-SECUREDROP_HOST=0.0.0.0
-SECUREDROP_PORT=8000
-SECUREDROP_TCP_PORT=9001
-SECUREDROP_DISCOVERY_PORT=45678
-```
-
----
-
 ## 🔌 API Reference
 
-### Public & Transfer Routes
-- `GET /api/info` — Retrieves node capabilities and sanitized session status.
-- `GET /api/health` — Lightweight unauthenticated healthcheck returning HTTP 200 and uptime timestamp.
-- `GET /api/shares/by-pin/{pin}` — Resolves an active share by its 4-digit numeric PIN.
-- `GET /api/shares/{token}` — Returns share metadata, file manifest, and status.
-- `GET /api/shares/mine` — Retrieves active shares hosted by the current user or guest creator tokens.
-- `DELETE /api/shares/{token}` — Self-service share deletion and immediate physical chunk wipe.
-- `DELETE /api/clipboard/{cid}` — Self-service clipboard snippet deletion and chunk wipe.
-- `GET /api/shares/{token}/files/{file_id}/stream` — RFC 7233 range-compatible byte stream.
-- `GET /api/shares/{token}/zip` — Dynamic streaming ZIP archive download.
+### Collaboration & Direct Sharing
+- `GET /api/groups` — List collaborative groups the user belongs to.
+- `POST /api/groups` — Create a new collaborative group.
+- `GET /api/groups/{id}/members` — List members in a group.
+- `POST /api/groups/{id}/members` — Add member to group.
+- `GET /api/users/search?q={query}` — Search active users by username or display name.
+- `POST /api/shares/direct` — Distribute a share directly to groups and/or usernames.
+- `GET /api/shares/direct/inbox` — Retrieve direct incoming payloads for current user or groups.
+
+### Collaborative Live Rooms & Ephemeral Chat
+- `GET /api/rooms` — List active collaborative drop-boxes.
+- `POST /api/rooms` — Host a new live collaborative room.
+- `GET /api/rooms/{id}` — View room items and files.
+- `POST /api/rooms/{id}/items` — Drop a share into a room (triggers real-time WebSocket broadcast).
+- `GET /api/chat/{channel}` — Get recent chat messages for a channel.
+- `POST /api/chat/{channel}` — Post an ephemeral message to a chat channel.
+
+### Transfer & Reliability Engine
+- `GET /api/shares/{token}/chunks-status` — Query uploaded vs missing chunks for resumable streaming.
+- `POST /api/shares/{token}/manifest` — Store pre-flight structured JSON manifest.
+- `GET /api/shares/{token}/manifest` — Inspect manifest before downloading.
+- `POST /api/clipboard/push` — Directionally push text to a target peer's clipboard.
+- `POST /api/peers/pair/request` — Initiate SAS 4-digit PIN pairing request.
+- `POST /api/peers/pair/verify` — Verify SAS 4-digit PIN code.
 
 ### Paginated Admin Endpoints (`LIMIT :limit OFFSET :offset`)
 - `GET /api/storage/shares?page=1&limit=25` — Paginated share storage list (options: 25, 100, 200).
 - `GET /api/admin/users?page=1&limit=25` — Paginated user accounts list (options: 25, 100, 200).
 - `GET /api/jobs?page=1&limit=25` — Paginated background node pull and transfer tasks.
 - `GET /api/history?page=1&limit=25` — Paginated immutable transfer and security audit logs.
-- `GET /api/storage/overview` — Summarized encrypted chunk storage volume and directory path.
-- `DELETE /api/storage/all` — Purges all stored chunks and temporary files.
-
----
-
-## 🛠️ Project Structure
-
-```text
-SecureDrop/
-├── start.sh                            # Enterprise service controller & auto-start manager
-├── bugs.txt                            # Comprehensive 19-section audit & hardening log
-├── Dockerfile                          # Container specification
-├── docker-compose.yml                  # Multi-container orchestration
-├── requirements.txt                    # Production Python dependencies
-├── requirements-termux-minimal.txt     # Termux lightweight dependencies
-├── run.py                              # Server bootstrap entry point
-├── docs/
-│   └── termux.md                       # Android Termux deployment guide
-└── securedrop/
-    ├── __init__.py
-    ├── main.py                         # FastAPI engine, layered crypto, pagination, reaper
-    └── static/
-        ├── common.js                   # Unified navigation, scoped StateManager, and theme
-        ├── send.html & send.js         # Chunked upload terminal with state recovery
-        ├── receive.html & receive.js   # 4-digit numeric PIN quick receiver
-        ├── shares.html & shares.js     # Hosted shares dashboard & self-service revocation
-        ├── share.html & share.js       # Manifest viewer, lightbox preview, and streaming
-        ├── dashboard.html & dashboard.js # Admin cockpit with 4 paginated management modals
-        ├── peers.html & peers.js       # UDP peer mesh radar & trust management
-        ├── clipboard.html & clipboard.js # Zero-knowledge encrypted text notepad
-        ├── styles.css                  # Multi-theme industrial styling & modal system
-        ├── manifest.json               # Progressive Web App manifest
-        └── sw.js                       # Auto-invalidating Network-First service worker
-```
 
 ---
 

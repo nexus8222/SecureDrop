@@ -508,10 +508,53 @@ the following line-speed performance optimizations were implemented:
      * Includes navigation controls (`< Prev`, `Next >`, `Page X of Y`, and `Showing X-Y of Z entries`).
 
 ====================================================================================================
+SECTION 20: SECUREDROP LAN v2.5 ENTERPRISE COLLABORATION SUITE & ARCHITECTURAL UPGRADES
+====================================================================================================
+1. Direct & Group Sharing Schema:
+   - Implemented `groups`, `group_members`, and `direct_shares` SQLite tables with foreign key cascades.
+   - Users can create groups, invite team members, and target files directly to groups or multiple usernames.
+   - Direct shares appear in a dedicated "Direct Shares Inbox" terminal with real-time WebSocket alerts.
+
+2. React + Vite + Tailwind + MaterialUI Single Page Application:
+   - Modern React 18 single page dashboard with dark/light themes, collapsible sidebar, and clean typography.
+   - Built to `securedrop/static/dist` and served seamlessly by FastAPI with client-side state preservation.
+
+3. Multicast UDP Discovery Upgrade (239.255.45.67:45678):
+   - Replaced broadcast-only heartbeats with IGMP multicast across all non-loopback network interfaces (`IP_ADD_MEMBERSHIP`).
+   - Retained broadcast fallback for consumer Wi-Fi routers that block multicast.
+   - Opened LAN radar to all users and guests (previously restricted to admin).
+
+4. Goofy Unique Random Usernames & Guest Persistence:
+   - Automatically assigns unique, humorous adjectives and animal names (e.g. `VelvetOtter_314`, `NeonCapybara_775`) to unauthenticated guests.
+   - Persisted via secure cookies and `guest_profiles` database records.
+
+5. Resumable Transfers & Manifest Pre-Flight:
+   - Endpoint `GET /api/shares/{token}/chunks-status` queries uploaded vs missing chunks across payload files.
+   - Checkpoints persisted in user-scoped `localStorage`; page reloads resume seamlessly without re-uploading completed chunks.
+   - Lightweight structured JSON manifest exchanged before payload streaming.
+
+6. Device Authentication Handshake (SAS PIN):
+   - Cryptographic 4-digit Short Authentication String (SAS) handshake for explicit peer pairing.
+
+7. Multi-Peer Collaborative Live Rooms (Drop-Boxes):
+   - Shared collaborative spaces (`collab_rooms`, `room_items`) with live WebSocket file drop feeds.
+
+8. Ephemeral LAN Chat & Directional Clipboard Push:
+   - Lightweight chat overlay attached to the radar dashboard.
+   - 1-click clipboard push directly syncs text snippets into target peer clipboard histories.
+
+9. Automated Linux Host Watch-Folder Daemon:
+   - Background worker monitoring `securedrop/watch/`.
+   - Automatically chunks, encrypts, creates active share PINs/QRs, and moves files to `watch/ingested/`.
+
+10. Hard Storage Allocation Quotas (RBAC):
+    - Strictly enforced quotas: Members (50 GB), Guests (2 GB), Admins (Unlimited).
+    - Calculated as `SUM(stored_size)` and enforced at share creation and chunk upload.
+
+====================================================================================================
 CONCLUSION
 ====================================================================================================
-All 18 vulnerability classes, architectural deficiencies, caching defects, and performance bottlenecks
-have been systematically resolved. SecureDrop LAN provides user-scoped state isolation,
-resilient upload recovery, LAN cache invalidation, clean non-emoji enterprise presentation, and
-scalable paginated administrative control.
+All 20 vulnerability classes, architectural deficiencies, caching defects, performance bottlenecks,
+and enterprise collaboration suite specifications have been systematically implemented, patched,
+and verified with end-to-end automated tests.
 ====================================================================================================
