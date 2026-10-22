@@ -187,6 +187,14 @@ do_start() {
   echo -e "${BLUE}* Target Host:Port  :${RESET} ${HOST}:${PORT} (TCP Chunks: ${TCP_PORT})"
   echo -e "${BLUE}* Log Destination   :${RESET} ${LOG_FILE}"
 
+  # Build React frontend if bundle not present
+  if [ -d "$SCRIPT_DIR/frontend" ] && [ ! -d "$SCRIPT_DIR/securedrop/static/dist" ]; then
+    if command -v npm >/dev/null 2>&1; then
+      echo -e "${CYAN}► Building React frontend bundle...${RESET}"
+      (cd "$SCRIPT_DIR/frontend" && npm run build) >/dev/null 2>&1 || true
+    fi
+  fi
+
   if [ "$mode" = "foreground" ]; then
     echo -e "${GREEN}${BOLD}► Starting SecureDrop LAN in FOREGROUND (Ctrl+C to stop)...${RESET}\n"
     exec "$PYTHON" run.py --host "$HOST" --port "$PORT" --tcp-port "$TCP_PORT"

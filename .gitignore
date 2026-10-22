@@ -49,3 +49,8 @@ Thumbs.db
 *.tar.gz
 build/
 dist/
+node_modules/
+**/node_modules/
+securedrop/watch/
+.npm/
+*.tsbuildinfo
