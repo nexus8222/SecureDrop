@@ -45,14 +45,17 @@ PULL_DIR = STORAGE_DIR / "pulls"
 VAULT_DIR = STORAGE_DIR / "vault"
 TMP_DIR = STORAGE_DIR / "tmp"
 QR_DIR = STORAGE_DIR / "qr"
+WATCH_DIR = ROOT / "watch"
+WATCH_INGESTED_DIR = ROOT / "watch" / "ingested"
 DB_PATH = STORAGE_DIR / "securedrop.sqlite3"
 
-for d in [STORAGE_DIR, CHUNK_DIR, PULL_DIR, VAULT_DIR, TMP_DIR, QR_DIR]:
+for d in [STORAGE_DIR, CHUNK_DIR, PULL_DIR, VAULT_DIR, TMP_DIR, QR_DIR, WATCH_DIR, WATCH_INGESTED_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_WEB_PORT = int(os.environ.get("SECUREDROP_WEB_PORT") or os.environ.get("SECUREDROP_PORT") or "8000")
 DEFAULT_TCP_PORT = int(os.environ.get("SECUREDROP_TCP_PORT", "9001"))
 DISCOVERY_PORT = int(os.environ.get("SECUREDROP_DISCOVERY_PORT", "45678"))
+MULTICAST_GROUP = "239.255.45.67"
 DEFAULT_DEVICE_NAME = os.environ.get("SECUREDROP_DEVICE_NAME") or "SecureDrop SafeNode"
 
 
@@ -292,6 +295,73 @@ class Database:
                     user_agent TEXT,
                     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS groups(
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    created_by TEXT,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS group_members(
+                    group_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'member',
+                    joined_at INTEGER NOT NULL,
+                    PRIMARY KEY (group_id, user_id),
+                    FOREIGN KEY(group_id) REFERENCES groups(id) ON DELETE CASCADE,
+                    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS direct_shares(
+                    id TEXT PRIMARY KEY,
+                    share_token TEXT NOT NULL,
+                    sender_id TEXT NOT NULL,
+                    recipient_id TEXT,
+                    group_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(share_token) REFERENCES shares(token) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS collab_rooms(
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    pin TEXT,
+                    host_user_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS room_items(
+                    id TEXT PRIMARY KEY,
+                    room_id TEXT NOT NULL,
+                    share_token TEXT NOT NULL,
+                    sender_name TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY(room_id) REFERENCES collab_rooms(id) ON DELETE CASCADE,
+                    FOREIGN KEY(share_token) REFERENCES shares(token) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS chat_messages(
+                    id TEXT PRIMARY KEY,
+                    channel TEXT NOT NULL,
+                    sender_id TEXT NOT NULL,
+                    sender_name TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS pairing_requests(
+                    id TEXT PRIMARY KEY,
+                    source_device_id TEXT NOT NULL,
+                    source_device_name TEXT NOT NULL,
+                    target_device_id TEXT NOT NULL,
+                    pin TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS guest_profiles(
+                    guest_id TEXT PRIMARY KEY,
+                    goofy_name TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    last_seen INTEGER NOT NULL
+                );
                 """
             )
             try:
@@ -315,11 +385,35 @@ class Database:
             except Exception:
                 pass
 
+            try:
+                con.execute("ALTER TABLE shares ADD COLUMN manifest_json TEXT DEFAULT '{}'")
+            except Exception:
+                pass
+
+            try:
+                con.execute("ALTER TABLE users ADD COLUMN visibility TEXT DEFAULT 'everyone'")
+            except Exception:
+                pass
+
+            try:
+                con.execute("ALTER TABLE users ADD COLUMN storage_quota_bytes INTEGER DEFAULT 53687091200")
+            except Exception:
+                pass
+
+            try:
+                con.execute("ALTER TABLE peers ADD COLUMN visibility TEXT DEFAULT 'everyone'")
+            except Exception:
+                pass
+
             con.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_files_share_token ON files(share_token)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_shares_owner ON shares(owner_user_id)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_shares_status ON shares(status)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_tickets_share ON access_tickets(share_token, ticket)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_direct_shares_recipient ON direct_shares(recipient_id)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_direct_shares_group ON direct_shares(group_id)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_room_items_room ON room_items(room_id)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat_messages(channel, created_at)")
             con.commit()
 
             curr_name = self.get_setting("device_name")
@@ -470,6 +564,7 @@ class DiscoveryService:
             "web_port": self.web_port,
             "tcp_port": self.tcp_port,
             "fingerprint": db.get_setting("identity_fingerprint"),
+            "visibility": db.get_setting("node_visibility", "everyone"),
             "ts": now(),
         }
 
@@ -499,7 +594,22 @@ class DiscoveryService:
             sock.close()
 
     def _send(self, kind: str) -> None:
+        vis = db.get_setting("node_visibility", "everyone")
+        if vis == "hidden" and kind != "probe":
+            return
         msg = json.dumps(self.payload(kind)).encode()
+        # 1. Multicast UDP over 239.255.45.67
+        try:
+            msock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            msock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            msock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            msock.settimeout(0.2)
+            msock.sendto(msg, (MULTICAST_GROUP, DISCOVERY_PORT))
+            msock.close()
+        except Exception:
+            pass
+
+        # 2. Subnet Broadcasts fallback
         targets = subnet_broadcasts(get_local_ips())
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -526,6 +636,19 @@ class DiscoveryService:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.bind(("", DISCOVERY_PORT))
             sock.settimeout(1.0)
+            # Join multicast group across default and all discovered interface IPs
+            try:
+                mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_GROUP), socket.INADDR_ANY)
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            except Exception:
+                pass
+            for ip in get_local_ips():
+                try:
+                    mreq = socket.inet_aton(MULTICAST_GROUP) + socket.inet_aton(ip)
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                except Exception:
+                    pass
+
             while not self.stop_event.is_set():
                 try:
                     data, addr = sock.recvfrom(65535)
@@ -581,13 +704,14 @@ class DiscoveryService:
         fp = str(msg.get("fingerprint") or "")[:64]
         if not all(c.isalnum() for c in fp):
             fp = ""
+        vis = str(msg.get("visibility") or "everyone").strip()[:16]
         trusted_row = db.one("SELECT * FROM trusted_devices WHERE device_id=?", (device_id,))
         trusted = int(trusted_row["trusted"]) if trusted_row else 0
         blocked = int(trusted_row["blocked"]) if trusted_row else 0
         db.execute(
             """
-            INSERT OR REPLACE INTO peers(device_id,name,ips,web_port,tcp_port,last_seen,trusted,blocked,fingerprint,meta_json)
-            VALUES(?,?,?,?,?,?,?,?,?,?)
+            INSERT OR REPLACE INTO peers(device_id,name,ips,web_port,tcp_port,last_seen,trusted,blocked,fingerprint,visibility,meta_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 device_id,
@@ -599,10 +723,11 @@ class DiscoveryService:
                 trusted,
                 blocked,
                 fp,
+                vis,
                 json.dumps({"app": str(msg.get("app") or APP_NAME)[:32], "version": str(msg.get("version") or APP_VERSION)[:16]}),
             ),
         )
-        broadcast_from_thread({"type": "peer_seen", "peer": peer_row_to_dict(db.one("SELECT * FROM peers WHERE device_id=?", (device_id,)))}, admin_only=True)
+        broadcast_from_thread({"type": "peer_seen", "peer": peer_row_to_dict(db.one("SELECT * FROM peers WHERE device_id=?", (device_id,)))}, admin_only=False)
 
 
 def row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
@@ -807,6 +932,120 @@ class UserRoleUpdate(BaseModel):
     status: Optional[str] = None
 
 
+class GroupCreate(BaseModel):
+    name: str
+    description: Optional[str] = ""
+
+
+class GroupMemberAdd(BaseModel):
+    username: str
+    role: str = "member"
+
+
+class DirectShareCreate(BaseModel):
+    share_token: str
+    group_id: Optional[str] = None
+    recipient_usernames: List[str] = Field(default_factory=list)
+
+
+class RoomCreate(BaseModel):
+    name: str
+    pin: Optional[str] = None
+    expires_seconds: Optional[int] = 86400
+
+
+class RoomItemAdd(BaseModel):
+    share_token: str
+    sender_name: Optional[str] = None
+
+
+class ChatMessageCreate(BaseModel):
+    text: str
+    sender_name: Optional[str] = None
+
+
+class ClipboardPush(BaseModel):
+    text: str
+    target_device_id: Optional[str] = None
+    target_username: Optional[str] = None
+    expires_seconds: Optional[int] = 3600
+
+
+class PairRequest(BaseModel):
+    target_device_id: str
+
+
+class PairVerify(BaseModel):
+    request_id: str
+    pin: str
+
+
+class VisibilityUpdate(BaseModel):
+    visibility: str
+
+
+class ManifestUpdate(BaseModel):
+    manifest: Dict[str, Any]
+
+
+ROLE_STORAGE_LIMITS: Dict[str, Optional[int]] = {
+    "admin": None,                      # Unlimited
+    "member": 50 * 1024 * 1024 * 1024,  # 50 GB
+    "guest": 2 * 1024 * 1024 * 1024,    # 2 GB
+}
+
+
+def get_user_storage_usage(user_id: Optional[str]) -> int:
+    if not user_id:
+        return 0
+    row = db.one(
+        """
+        SELECT COALESCE(SUM(c.stored_size), 0) AS total_bytes
+        FROM chunks c
+        JOIN shares s ON c.share_token = s.token
+        WHERE s.owner_user_id = ? AND s.status = 'open'
+        """,
+        (user_id,),
+    )
+    return int(row["total_bytes"]) if row else 0
+
+
+GOOFY_ADJECTIVES = [
+    "Cosmic", "Velvet", "Turbo", "Quantum", "Ninja", "Stealth", "Bouncy", "Neon",
+    "Shadow", "Electric", "Pixel", "Hyper", "Frosty", "Zesty", "Mystic", "Silly",
+    "Wobbly", "Groovy", "Snazzy", "Fluffy", "Spicy", "Breezy", "Chilly", "Dizzy",
+    "Lucky", "Swift", "Atomic", "Brave", "Clever", "Daring", "Flashy", "Golden"
+]
+GOOFY_ANIMALS = [
+    "Penguin", "Otter", "Falcon", "Badger", "Fox", "Panther", "Capybara", "Koala",
+    "Lemur", "Cheetah", "Hedgehog", "Dolphin", "Panda", "Wolf", "Platypus", "Meerkat",
+    "Walrus", "Chameleon", "Narwhal", "Sloth", "Gecko", "Raccoon", "Beaver", "Alpaca",
+    "Hamster", "Toucan", "Octopus", "Lynx", "Puffin", "Mongoose", "Wombat"
+]
+
+
+def generate_goofy_name() -> str:
+    adj = secrets.choice(GOOFY_ADJECTIVES)
+    animal = secrets.choice(GOOFY_ANIMALS)
+    num = secrets.randbelow(900) + 100
+    return f"{adj}{animal}_{num}"
+
+
+def get_or_create_guest_profile(guest_id: Optional[str]) -> Tuple[str, str]:
+    if guest_id:
+        row = db.one("SELECT * FROM guest_profiles WHERE guest_id=?", (guest_id,))
+        if row:
+            db.execute("UPDATE guest_profiles SET last_seen=? WHERE guest_id=?", (now(), guest_id))
+            return row["guest_id"], row["goofy_name"]
+    new_id = "gst_" + b64url(secrets.token_bytes(8))
+    goofy_name = generate_goofy_name()
+    db.execute(
+        "INSERT OR REPLACE INTO guest_profiles(guest_id, goofy_name, created_at, last_seen) VALUES(?,?,?,?)",
+        (new_id, goofy_name, now(), now()),
+    )
+    return new_id, goofy_name
+
+
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
@@ -831,6 +1070,9 @@ async def add_security_headers(request: Request, call_next):
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+if (STATIC_DIR / "dist" / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "dist" / "assets"), name="assets")
+
 
 
 ADMIN_COOKIE = "securedrop_admin"
@@ -1256,49 +1498,78 @@ def read_chunk_bytes(token: str, file_id: str, chunk_index: int, ticket: Optiona
     return data, row_to_dict(row) or {}
 
 
+DIST_INDEX = STATIC_DIR / "dist" / "index.html"
+
+
+def serve_spa() -> FileResponse:
+    if DIST_INDEX.exists():
+        return FileResponse(DIST_INDEX)
+    return FileResponse(STATIC_DIR / "send.html")
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "send.html")
+    return serve_spa()
 
 
 @app.get("/send", response_class=HTMLResponse)
 async def send_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "send.html")
+    return serve_spa()
 
 
 @app.get("/receive", response_class=HTMLResponse)
 async def receive_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "receive.html")
+    return serve_spa()
+
+
+@app.get("/inbox", response_class=HTMLResponse)
+async def inbox_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/shares", response_class=HTMLResponse)
+async def shares_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/rooms", response_class=HTMLResponse)
+async def rooms_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/radar", response_class=HTMLResponse)
+async def radar_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/peers", response_class=HTMLResponse)
+async def peers_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/clipboard", response_class=HTMLResponse)
+async def clipboard_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/gallery", response_class=HTMLResponse)
+async def gallery_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page() -> FileResponse:
+    return serve_spa()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page() -> FileResponse:
+    return serve_spa()
 
 
 @app.get("/share/{token}", response_class=HTMLResponse)
 async def share_page(token: str) -> FileResponse:
     return FileResponse(STATIC_DIR / "share.html")
-
-
-@app.get("/shares", response_class=HTMLResponse)
-async def shares_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "shares.html")
-
-
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "dashboard.html")
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "dashboard.html")
-
-
-@app.get("/peers", response_class=HTMLResponse)
-async def peers_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "peers.html")
-
-
-@app.get("/clipboard", response_class=HTMLResponse)
-async def clipboard_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "clipboard.html")
 
 
 @app.get("/manifest.json")
@@ -1311,41 +1582,84 @@ async def service_worker() -> FileResponse:
     return FileResponse(STATIC_DIR / "sw.js")
 
 
+@app.get("/api/auth/guest-id")
+async def get_guest_id_endpoint(request: Request, response: Response) -> Dict[str, Any]:
+    existing_id = request.cookies.get("securedrop_guest_id") or request.headers.get("x-guest-id")
+    guest_id, goofy_name = get_or_create_guest_profile(existing_id)
+    response.set_cookie("securedrop_guest_id", guest_id, max_age=86400 * 365, httponly=False, samesite="lax")
+    return {
+        "guest_id": guest_id,
+        "username": goofy_name,
+        "display_name": goofy_name,
+        "role": "guest",
+        "storage_quota_bytes": ROLE_STORAGE_LIMITS["guest"],
+        "storage_used_bytes": get_user_storage_usage(guest_id),
+    }
+
+
 @app.get("/api/auth/status")
-async def auth_status(request: Request) -> Dict[str, Any]:
+async def auth_status(request: Request, response: Response) -> Dict[str, Any]:
     ensure_env_admin_password()
     configured = admin_configured()
     user = get_current_user(request)
     admin = is_admin_request(request)
-    role = "admin" if admin else (user.get("role") if user else "guest")
+
+    if user:
+        user_data = dict(user)
+        user_role = user.get("role", "member")
+        user_data["storage_quota_bytes"] = ROLE_STORAGE_LIMITS.get(user_role)
+        user_data["storage_used_bytes"] = get_user_storage_usage(user["id"])
+    else:
+        existing_id = request.cookies.get("securedrop_guest_id") or request.headers.get("x-guest-id")
+        guest_id, goofy_name = get_or_create_guest_profile(existing_id)
+        response.set_cookie("securedrop_guest_id", guest_id, max_age=86400 * 365, httponly=False, samesite="lax")
+        user_role = "guest"
+        user_data = {
+            "id": guest_id,
+            "username": goofy_name,
+            "display_name": goofy_name,
+            "role": "guest",
+            "storage_quota_bytes": ROLE_STORAGE_LIMITS["guest"],
+            "storage_used_bytes": get_user_storage_usage(guest_id),
+        }
+
+    role = "admin" if admin else user_role
     return {
         "configured": configured,
         "role": role,
         "is_admin": admin,
         "authenticated": bool(user),
-        "user": user or {"id": "guest", "username": "guest", "display_name": "Guest User", "role": "guest"},
+        "user": user_data,
         "can_setup": not configured,
-        "guest_permissions": ["send", "receive"],
-        "admin_permissions": ["approvals", "peers", "queue", "history", "storage", "settings", "users"],
+        "guest_permissions": ["send", "receive", "rooms", "chat", "direct_inbox"],
+        "admin_permissions": ["approvals", "peers", "queue", "history", "storage", "settings", "users", "rooms", "chat"],
     }
 
 
 @app.get("/api/auth/me")
-async def auth_me(request: Request) -> Dict[str, Any]:
+async def auth_me(request: Request, response: Response) -> Dict[str, Any]:
     user = get_current_user(request)
     if not user:
+        existing_id = request.cookies.get("securedrop_guest_id") or request.headers.get("x-guest-id")
+        guest_id, goofy_name = get_or_create_guest_profile(existing_id)
+        response.set_cookie("securedrop_guest_id", guest_id, max_age=86400 * 365, httponly=False, samesite="lax")
         return {
             "authenticated": False,
             "user": {
-                "id": "guest",
-                "username": "guest",
-                "display_name": "Guest User",
+                "id": guest_id,
+                "username": goofy_name,
+                "display_name": goofy_name,
                 "role": "guest",
+                "storage_quota_bytes": ROLE_STORAGE_LIMITS["guest"],
+                "storage_used_bytes": get_user_storage_usage(guest_id),
             },
         }
+    user_data = dict(user)
+    user_data["storage_quota_bytes"] = ROLE_STORAGE_LIMITS.get(user.get("role", "member"))
+    user_data["storage_used_bytes"] = get_user_storage_usage(user["id"])
     return {
         "authenticated": True,
-        "user": user,
+        "user": user_data,
     }
 
 
@@ -1685,18 +1999,94 @@ async def optimizer() -> Dict[str, Any]:
 
 @app.get("/api/discovery/peers")
 async def list_peers(request: Request) -> Dict[str, Any]:
-    require_admin(request)
     cutoff = now() - 60
     rows = db.all("SELECT * FROM peers WHERE last_seen>=? ORDER BY trusted DESC, last_seen DESC", (cutoff,))
-    return {"peers": [peer_row_to_dict(r) for r in rows]}
+    is_admin = is_admin_request(request)
+    my_dev = db.get_setting("device_id")
+    filtered = []
+    for r in rows:
+        d = peer_row_to_dict(r)
+        if not d:
+            continue
+        vis = d.get("visibility", "everyone")
+        if not is_admin:
+            if vis == "hidden" and d.get("device_id") != my_dev:
+                continue
+            if vis == "contacts" and not d.get("trusted"):
+                continue
+        filtered.append(d)
+    return {"peers": filtered}
 
 
 @app.post("/api/discovery/probe")
 async def probe(request: Request) -> Dict[str, Any]:
-    require_admin(request)
     discovery: DiscoveryService = app.state.discovery
     discovery.probe()
-    return {"ok": True, "message": "Probe broadcast sent", "broadcasts": subnet_broadcasts(get_local_ips())}
+    return {"ok": True, "message": "Probe broadcast & multicast sent", "broadcasts": subnet_broadcasts(get_local_ips())}
+
+
+@app.get("/api/user/visibility")
+async def get_visibility(request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if user:
+        u_row = db.one("SELECT visibility FROM users WHERE id=?", (user["id"],))
+        vis = u_row["visibility"] if u_row and u_row["visibility"] else "everyone"
+    else:
+        vis = db.get_setting("node_visibility", "everyone")
+    return {"visibility": vis}
+
+
+@app.post("/api/user/visibility")
+async def set_visibility(data: VisibilityUpdate, request: Request) -> Dict[str, Any]:
+    vis = data.visibility.lower()
+    if vis not in ("everyone", "contacts", "hidden"):
+        raise HTTPException(400, "Invalid visibility option. Must be 'everyone', 'contacts', or 'hidden'")
+    user = get_current_user(request)
+    if user:
+        db.execute("UPDATE users SET visibility=? WHERE id=?", (vis, user["id"]))
+    db.set_setting("node_visibility", vis)
+    return {"ok": True, "visibility": vis}
+
+
+@app.post("/api/peers/pair/request")
+async def pair_request(data: PairRequest, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    my_dev = db.get_setting("device_id") or "dev_local"
+    my_name = db.get_setting("device_name", DEFAULT_DEVICE_NAME)
+    pin = f"{secrets.randbelow(9000) + 1000}"
+    req_id = "pair_" + b64url(secrets.token_bytes(8))
+    db.execute(
+        "INSERT INTO pairing_requests(id, source_device_id, source_device_name, target_device_id, pin, status, created_at, expires_at) VALUES(?,?,?,?,?,?,?,?)",
+        (req_id, my_dev, my_name, data.target_device_id, pin, "pending", now(), now() + 300),
+    )
+    await ws_manager.broadcast({
+        "type": "pairing_requested",
+        "request_id": req_id,
+        "source_device_id": my_dev,
+        "source_device_name": my_name,
+        "target_device_id": data.target_device_id,
+        "pin": pin,
+    })
+    return {"ok": True, "request_id": req_id, "pin": pin}
+
+
+@app.post("/api/peers/pair/verify")
+async def pair_verify(data: PairVerify, request: Request) -> Dict[str, Any]:
+    req = db.one("SELECT * FROM pairing_requests WHERE id=? AND status='pending'", (data.request_id,))
+    if not req:
+        raise HTTPException(404, "Pairing request not found or expired")
+    if req["expires_at"] < now():
+        raise HTTPException(410, "Pairing request expired")
+    if req["pin"] != data.pin.strip():
+        raise HTTPException(400, "Incorrect pairing PIN")
+    db.execute("UPDATE pairing_requests SET status='accepted' WHERE id=?", (data.request_id,))
+    db.execute(
+        "INSERT OR REPLACE INTO trusted_devices(device_id, name, trusted, blocked, updated_at) VALUES(?,?,1,0,?)",
+        (req["source_device_id"], req["source_device_name"], now()),
+    )
+    db.execute("UPDATE peers SET trusted=1 WHERE device_id=?", (req["source_device_id"],))
+    await ws_manager.broadcast({"type": "pairing_completed", "request_id": data.request_id})
+    return {"ok": True, "message": "Device paired and trusted successfully"}
 
 
 @app.post("/api/trust")
@@ -1727,6 +2117,128 @@ def generate_unique_pin() -> str:
     return f"{secrets.randbelow(900000) + 100000}"
 
 
+class WatchFolderService:
+    def __init__(self, watch_dir: Path, ingested_dir: Path):
+        self.watch_dir = watch_dir
+        self.ingested_dir = ingested_dir
+        self.stop_event = threading.Event()
+        self.thread: Optional[threading.Thread] = None
+        self._last_sizes: Dict[str, Tuple[int, float]] = {}
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def _worker(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._scan_and_ingest()
+            except Exception:
+                pass
+            self.stop_event.wait(3.0)
+
+    def _scan_and_ingest(self) -> None:
+        if not self.watch_dir.exists():
+            return
+        now_ts = time.time()
+        for item in self.watch_dir.iterdir():
+            if not item.is_file():
+                continue
+            name = item.name
+            if name.startswith(".") or name.endswith((".tmp", ".part", ".crdownload")):
+                continue
+            try:
+                curr_size = item.stat().st_size
+            except Exception:
+                continue
+
+            if name not in self._last_sizes:
+                self._last_sizes[name] = (curr_size, now_ts)
+                continue
+            prev_size, prev_ts = self._last_sizes[name]
+            if curr_size != prev_size:
+                self._last_sizes[name] = (curr_size, now_ts)
+                continue
+            if now_ts - prev_ts < 2.0:
+                continue
+
+            del self._last_sizes[name]
+            self._ingest_file(item)
+
+    def _ingest_file(self, filepath: Path) -> None:
+        try:
+            data = filepath.read_bytes()
+            size = len(data)
+            token = b64url(secrets.token_bytes(10))
+            pin = generate_unique_pin()
+            title = filepath.name
+            file_id = "file_" + b64url(secrets.token_bytes(12))
+            chunk_size = 4 * 1024 * 1024
+            chunk_count = math.ceil(size / chunk_size) if size > 0 else 1
+
+            db.execute(
+                """
+                INSERT INTO shares(token, pin, title, mode, created_at, status, owner_device_id, meta_json)
+                VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (token, pin, title, "files", now(), "open", db.get_setting("device_id"), json.dumps({"source": "watch-folder"})),
+            )
+            share_dir(token).mkdir(parents=True, exist_ok=True)
+            create_server_key_for_share(token)
+
+            import mimetypes
+            mime, _ = mimetypes.guess_type(title)
+
+            db.execute(
+                """
+                INSERT INTO files(id, share_token, name, relative_path, size, mime, chunk_size, chunk_count, compression, file_sha256, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (file_id, token, title, title, size, mime or "application/octet-stream", chunk_size, chunk_count, "none", sha256_bytes(data), now()),
+            )
+
+            aesgcm = get_server_aes(token)
+            for idx in range(chunk_count):
+                chunk_slice = data[idx * chunk_size : (idx + 1) * chunk_size]
+                plain_sha = sha256_bytes(chunk_slice)
+                nonce = secrets.token_bytes(12)
+                ciphertext = aesgcm.encrypt(nonce, chunk_slice, None)
+                cipher_sha = sha256_bytes(ciphertext)
+                rel = f"{token}/{file_id}/{idx:012d}.chunk"
+                cpath = safe_join(CHUNK_DIR, rel)
+                cpath.parent.mkdir(parents=True, exist_ok=True)
+                cpath.write_bytes(ciphertext)
+
+                db.execute(
+                    """
+                    INSERT INTO chunks(share_token, file_id, chunk_index, path, stored_size, original_size, plaintext_sha256, ciphertext_sha256, nonce_b64, uploaded_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (token, file_id, idx, rel, len(ciphertext), len(chunk_slice), plain_sha, cipher_sha, b64url(nonce), now()),
+                )
+
+            # Generate QR code
+            host = f"127.0.0.1:{DEFAULT_WEB_PORT}"
+            qr_img = qrcode.make(f"http://{host}/share/{token}")
+            qr_path = safe_join(QR_DIR, f"{token}.png")
+            qr_img.save(qr_path)
+
+            db.execute(
+                "INSERT INTO history(id, direction, title, peer, size, status, detail, created_at, finished_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                ("hist_" + b64url(secrets.token_bytes(8)), "watch_ingest", title, "local_watch", size, "open", f"Auto-ingested to share {token} (PIN: {pin})", now(), now()),
+            )
+
+            dest = self.ingested_dir / f"{now()}_{filepath.name}"
+            shutil.move(str(filepath), str(dest))
+
+            broadcast_from_thread({"type": "share_created", "token": token, "title": title, "pin": pin}, admin_only=False)
+        except Exception:
+            pass
+
+
 @app.post("/api/shares")
 async def create_share(data: ShareCreate, request: Request) -> Dict[str, Any]:
     token = b64url(secrets.token_bytes(10))
@@ -1734,7 +2246,19 @@ async def create_share(data: ShareCreate, request: Request) -> Dict[str, Any]:
     exp = now() + data.expires_seconds if data.expires_seconds else None
     ph = password_hash(data.password) if data.password else None
     user = get_current_user(request)
-    owner_user_id = user["id"] if user else None
+    role = user["role"] if user else "guest"
+    owner_user_id = user["id"] if user else (request.cookies.get("securedrop_guest_id") or "gst_guest")
+
+    # Hard storage quota check (50GB for member, 2GB for guest, unlimited for admin)
+    limit = ROLE_STORAGE_LIMITS.get(role, 2 * 1024 * 1024 * 1024)
+    if limit is not None:
+        used = get_user_storage_usage(owner_user_id)
+        if used >= limit:
+            raise HTTPException(
+                413,
+                f"Storage quota reached for role '{role}'. Used: {used // (1024*1024)}MB / Limit: {limit // (1024*1024)}MB. Delete existing shares to free up storage."
+            )
+
     upload_token = "upl_" + b64url(secrets.token_bytes(24))
 
     meta = data.meta or {}
@@ -1944,6 +2468,370 @@ async def list_shares(request: Request, tokens: Optional[str] = None) -> Dict[st
         d.pop("password_hash", None)
         out.append(d)
     return {"shares": out}
+
+
+@app.get("/api/shares/{token}/chunks-status")
+async def share_chunks_status(token: str) -> Dict[str, Any]:
+    share = db.one("SELECT * FROM shares WHERE token=?", (token,))
+    if not share:
+        raise HTTPException(404, "Share not found")
+    files = db.all("SELECT * FROM files WHERE share_token=?", (token,))
+    file_statuses = []
+    for f in files:
+        uploaded_chunks = db.all("SELECT chunk_index, stored_size FROM chunks WHERE file_id=? ORDER BY chunk_index", (f["id"],))
+        uploaded_indices = set(c["chunk_index"] for c in uploaded_chunks)
+        total = int(f["chunk_count"])
+        missing = [i for i in range(total) if i not in uploaded_indices]
+        file_statuses.append({
+            "file_id": f["id"],
+            "name": f["name"],
+            "size": f["size"],
+            "chunk_size": f["chunk_size"],
+            "chunk_count": total,
+            "uploaded_count": len(uploaded_indices),
+            "uploaded_indices": sorted(uploaded_indices),
+            "missing_indices": missing,
+            "is_complete": len(missing) == 0,
+        })
+    return {"token": token, "status": share["status"], "files": file_statuses}
+
+
+@app.post("/api/shares/{token}/manifest")
+async def save_manifest(token: str, data: ManifestUpdate, request: Request) -> Dict[str, Any]:
+    share = db.one("SELECT * FROM shares WHERE token=?", (token,))
+    if not share:
+        raise HTTPException(404, "Share not found")
+    check_upload_auth(share, request)
+    db.execute("UPDATE shares SET manifest_json=? WHERE token=?", (json.dumps(data.manifest), token))
+    return {"ok": True}
+
+
+@app.get("/api/shares/{token}/manifest")
+async def get_manifest(token: str) -> Dict[str, Any]:
+    share = db.one("SELECT manifest_json FROM shares WHERE token=?", (token,))
+    if not share:
+        raise HTTPException(404, "Share not found")
+    try:
+        manifest = json.loads(share["manifest_json"] or "{}")
+    except Exception:
+        manifest = {}
+    return {"token": token, "manifest": manifest}
+
+
+@app.get("/api/groups")
+async def list_groups(request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        return {"groups": []}
+    if user["role"] == "admin":
+        rows = db.all("SELECT * FROM groups ORDER BY created_at DESC")
+    else:
+        rows = db.all(
+            """
+            SELECT g.* FROM groups g
+            JOIN group_members m ON g.id = m.group_id
+            WHERE m.user_id = ?
+            ORDER BY g.created_at DESC
+            """,
+            (user["id"],),
+        )
+    result = []
+    for r in rows:
+        d = row_to_dict(r) or {}
+        mc = db.one("SELECT COUNT(*) as c FROM group_members WHERE group_id=?", (r["id"],))
+        d["member_count"] = mc["c"] if mc else 0
+        result.append(d)
+    return {"groups": result}
+
+
+@app.post("/api/groups")
+async def create_group(data: GroupCreate, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(401, "Authentication required to create groups")
+    group_id = "grp_" + b64url(secrets.token_bytes(8))
+    db.execute(
+        "INSERT INTO groups(id, name, description, created_by, created_at) VALUES(?,?,?,?,?)",
+        (group_id, data.name.strip(), data.description or "", user["id"], now()),
+    )
+    db.execute(
+        "INSERT INTO group_members(group_id, user_id, role, joined_at) VALUES(?,?,?,?)",
+        (group_id, user["id"], "owner", now()),
+    )
+    return {"ok": True, "group_id": group_id, "name": data.name.strip()}
+
+
+@app.get("/api/groups/{group_id}/members")
+async def list_group_members(group_id: str, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    is_mem = db.one("SELECT 1 FROM group_members WHERE group_id=? AND user_id=?", (group_id, user["id"]))
+    if not is_mem and user["role"] != "admin":
+        raise HTTPException(403, "Not a member of this group")
+    members = db.all(
+        """
+        SELECT u.id, u.username, u.display_name, u.role as user_role, m.role as group_role, m.joined_at
+        FROM group_members m
+        JOIN users u ON m.user_id = u.id
+        WHERE m.group_id = ?
+        ORDER BY m.joined_at ASC
+        """,
+        (group_id,),
+    )
+    return {"members": [row_to_dict(m) for m in members]}
+
+
+@app.post("/api/groups/{group_id}/members")
+async def add_group_member(group_id: str, data: GroupMemberAdd, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    my_mem = db.one("SELECT role FROM group_members WHERE group_id=? AND user_id=?", (group_id, user["id"]))
+    if user["role"] != "admin" and (not my_mem or my_mem["role"] not in ("owner", "admin")):
+        raise HTTPException(403, "Only group owner or admin can add members")
+    target_user = db.one("SELECT id, username FROM users WHERE LOWER(username)=LOWER(?)", (data.username.strip(),))
+    if not target_user:
+        raise HTTPException(404, f"User '{data.username}' not found")
+    db.execute(
+        "INSERT OR REPLACE INTO group_members(group_id, user_id, role, joined_at) VALUES(?,?,?,?)",
+        (group_id, target_user["id"], data.role or "member", now()),
+    )
+    return {"ok": True, "user_id": target_user["id"], "username": target_user["username"]}
+
+
+@app.delete("/api/groups/{group_id}/members/{user_id}")
+async def remove_group_member(group_id: str, user_id: str, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(401, "Authentication required")
+    if user["id"] != user_id and user["role"] != "admin":
+        my_mem = db.one("SELECT role FROM group_members WHERE group_id=? AND user_id=?", (group_id, user["id"]))
+        if not my_mem or my_mem["role"] not in ("owner", "admin"):
+            raise HTTPException(403, "Not allowed to remove member")
+    db.execute("DELETE FROM group_members WHERE group_id=? AND user_id=?", (group_id, user_id))
+    return {"ok": True}
+
+
+@app.get("/api/users/search")
+async def search_users(q: str = Query("", min_length=1), request: Request = None) -> Dict[str, Any]:
+    term = f"%{q.strip().lower()}%"
+    rows = db.all(
+        """
+        SELECT id, username, display_name, role, status
+        FROM users
+        WHERE (LOWER(username) LIKE ? OR LOWER(display_name) LIKE ?) AND status='active'
+        LIMIT 25
+        """,
+        (term, term),
+    )
+    return {"users": [{"id": r["id"], "username": r["username"], "display_name": r["display_name"], "role": r["role"]} for r in rows]}
+
+
+@app.post("/api/shares/direct")
+async def create_direct_share(data: DirectShareCreate, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    sender_id = user["id"] if user else (request.cookies.get("securedrop_guest_id") or "gst_guest")
+    sender_name = user["display_name"] if user else "Guest"
+
+    share = db.one("SELECT * FROM shares WHERE token=?", (data.share_token,))
+    if not share:
+        raise HTTPException(404, "Share not found")
+
+    recipients_created = 0
+    if data.group_id:
+        group_members = db.all("SELECT user_id FROM group_members WHERE group_id=?", (data.group_id,))
+        for gm in group_members:
+            if gm["user_id"] != sender_id:
+                ds_id = "ds_" + b64url(secrets.token_bytes(8))
+                db.execute(
+                    "INSERT INTO direct_shares(id, share_token, sender_id, recipient_id, group_id, status, created_at) VALUES(?,?,?,?,?,?,?)",
+                    (ds_id, data.share_token, sender_id, gm["user_id"], data.group_id, "pending", now()),
+                )
+                recipients_created += 1
+
+    for uname in data.recipient_usernames:
+        u = db.one("SELECT id FROM users WHERE LOWER(username)=LOWER(?)", (uname.strip(),))
+        if u and u["id"] != sender_id:
+            ds_id = "ds_" + b64url(secrets.token_bytes(8))
+            db.execute(
+                "INSERT INTO direct_shares(id, share_token, sender_id, recipient_id, group_id, status, created_at) VALUES(?,?,?,?,?,?,?)",
+                (ds_id, data.share_token, sender_id, u["id"], None, "pending", now()),
+            )
+            recipients_created += 1
+
+    await ws_manager.broadcast({
+        "type": "direct_share_received",
+        "share_token": data.share_token,
+        "title": share["title"],
+        "pin": share["pin"],
+        "sender_name": sender_name,
+        "group_id": data.group_id,
+        "recipients": data.recipient_usernames,
+    })
+
+    return {"ok": True, "recipients_count": recipients_created}
+
+
+@app.get("/api/shares/direct/inbox")
+async def list_direct_shares_inbox(request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    if not user:
+        guest_id = request.cookies.get("securedrop_guest_id")
+        if not guest_id:
+            return {"shares": []}
+        user_id = guest_id
+    else:
+        user_id = user["id"]
+
+    rows = db.all(
+        """
+        SELECT ds.id as direct_share_id, ds.created_at as shared_at, ds.status as share_status,
+               s.token, s.pin, s.title, s.mode, s.created_at, s.expires_at, s.status,
+               COALESCE(u.display_name, ds.sender_id) as sender_name,
+               g.name as group_name
+        FROM direct_shares ds
+        JOIN shares s ON ds.share_token = s.token
+        LEFT JOIN users u ON ds.sender_id = u.id
+        LEFT JOIN groups g ON ds.group_id = g.id
+        WHERE ds.recipient_id = ? AND s.status = 'open'
+        ORDER BY ds.created_at DESC
+        LIMIT 100
+        """,
+        (user_id,),
+    )
+    return {"shares": [row_to_dict(r) for r in rows]}
+
+
+@app.get("/api/rooms")
+async def list_rooms() -> Dict[str, Any]:
+    cutoff = now()
+    rows = db.all("SELECT * FROM collab_rooms WHERE expires_at IS NULL OR expires_at > ? ORDER BY created_at DESC", (cutoff,))
+    res = []
+    for r in rows:
+        d = row_to_dict(r) or {}
+        ic = db.one("SELECT COUNT(*) as c FROM room_items WHERE room_id=?", (r["id"],))
+        d["item_count"] = ic["c"] if ic else 0
+        d["has_pin"] = bool(r["pin"])
+        d.pop("pin", None)
+        res.append(d)
+    return {"rooms": res}
+
+
+@app.post("/api/rooms")
+async def create_room(data: RoomCreate, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    host_id = user["id"] if user else (request.cookies.get("securedrop_guest_id") or "gst_guest")
+    room_id = "rm_" + b64url(secrets.token_bytes(8))
+    exp = (now() + data.expires_seconds) if data.expires_seconds else None
+    db.execute(
+        "INSERT INTO collab_rooms(id, name, pin, host_user_id, created_at, expires_at) VALUES(?,?,?,?,?,?)",
+        (room_id, data.name.strip(), data.pin.strip() if data.pin else None, host_id, now(), exp),
+    )
+    await ws_manager.broadcast({"type": "room_created", "room_id": room_id, "name": data.name.strip()})
+    return {"ok": True, "room_id": room_id, "name": data.name.strip()}
+
+
+@app.get("/api/rooms/{room_id}")
+async def get_room(room_id: str, pin: Optional[str] = None) -> Dict[str, Any]:
+    room = db.one("SELECT * FROM collab_rooms WHERE id=?", (room_id,))
+    if not room:
+        raise HTTPException(404, "Room not found")
+    if room["pin"] and room["pin"] != (pin or "").strip():
+        raise HTTPException(403, "Incorrect room PIN")
+    items = db.all(
+        """
+        SELECT ri.id, ri.share_token, ri.sender_name, ri.created_at,
+               s.title, s.pin as share_pin, s.mode, s.status
+        FROM room_items ri
+        JOIN shares s ON ri.share_token = s.token
+        WHERE ri.room_id = ? AND s.status = 'open'
+        ORDER BY ri.created_at DESC
+        """,
+        (room_id,),
+    )
+    d = row_to_dict(room) or {}
+    d.pop("pin", None)
+    d["items"] = [row_to_dict(i) for i in items]
+    return d
+
+
+@app.post("/api/rooms/{room_id}/items")
+async def add_room_item(room_id: str, data: RoomItemAdd, request: Request) -> Dict[str, Any]:
+    room = db.one("SELECT * FROM collab_rooms WHERE id=?", (room_id,))
+    if not room:
+        raise HTTPException(404, "Room not found")
+    share = db.one("SELECT * FROM shares WHERE token=?", (data.share_token,))
+    if not share:
+        raise HTTPException(404, "Share not found")
+    user = get_current_user(request)
+    sender = data.sender_name or (user["display_name"] if user else "LAN Peer")
+    item_id = "ri_" + b64url(secrets.token_bytes(8))
+    db.execute(
+        "INSERT INTO room_items(id, room_id, share_token, sender_name, created_at) VALUES(?,?,?,?,?)",
+        (item_id, room_id, data.share_token, sender, now()),
+    )
+    await ws_manager.broadcast({
+        "type": "room_item_added",
+        "room_id": room_id,
+        "item": {
+            "id": item_id,
+            "share_token": data.share_token,
+            "title": share["title"],
+            "share_pin": share["pin"],
+            "sender_name": sender,
+            "created_at": now(),
+        }
+    })
+    return {"ok": True, "item_id": item_id}
+
+
+@app.get("/api/chat/{channel}")
+async def get_chat_messages(channel: str) -> Dict[str, Any]:
+    rows = db.all("SELECT * FROM chat_messages WHERE channel=? ORDER BY created_at ASC LIMIT 100", (channel,))
+    return {"messages": [row_to_dict(r) for r in rows]}
+
+
+@app.post("/api/chat/{channel}")
+async def post_chat_message(channel: str, data: ChatMessageCreate, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    sender_id = user["id"] if user else (request.cookies.get("securedrop_guest_id") or "gst_guest")
+    sender_name = data.sender_name or (user["display_name"] if user else "LAN Guest")
+    msg_id = "msg_" + b64url(secrets.token_bytes(8))
+    created = now()
+    db.execute(
+        "INSERT INTO chat_messages(id, channel, sender_id, sender_name, text, created_at) VALUES(?,?,?,?,?,?)",
+        (msg_id, channel, sender_id, sender_name, data.text.strip(), created),
+    )
+    msg_obj = {
+        "id": msg_id,
+        "channel": channel,
+        "sender_id": sender_id,
+        "sender_name": sender_name,
+        "text": data.text.strip(),
+        "created_at": created,
+    }
+    await ws_manager.broadcast({"type": "chat_message", "message": msg_obj})
+    return {"ok": True, "message": msg_obj}
+
+
+@app.post("/api/clipboard/push")
+async def clipboard_push(data: ClipboardPush, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    sender = user["display_name"] if user else "LAN Peer"
+    cid = "clip_" + b64url(secrets.token_bytes(8))
+    exp = (now() + data.expires_seconds) if data.expires_seconds else (now() + 3600)
+    db.execute("INSERT INTO clipboard_items(id, text, created_at, expires_at) VALUES(?,?,?,?)", (cid, data.text, now(), exp))
+    await ws_manager.broadcast({
+        "type": "clipboard_pushed",
+        "id": cid,
+        "text": data.text,
+        "from": sender,
+        "target_device_id": data.target_device_id,
+        "target_username": data.target_username,
+        "created_at": now(),
+    })
+    return {"ok": True, "id": cid}
 
 
 @app.get("/api/shares/{token}")
@@ -2980,6 +3868,7 @@ def create_app(web_port: int, tcp_port: int) -> FastAPI:
     app.state.tcp_port = tcp_port
     app.state.discovery = DiscoveryService(web_port, tcp_port)
     app.state.tcp_server = TCPChunkServer("0.0.0.0", tcp_port)
+    app.state.watch_folder = WatchFolderService(WATCH_DIR, WATCH_INGESTED_DIR)
     return app
 
 
@@ -3008,6 +3897,7 @@ async def on_startup() -> None:
         create_app(DEFAULT_WEB_PORT, DEFAULT_TCP_PORT)
     app.state.discovery.start()
     app.state.tcp_server.start()
+    app.state.watch_folder.start()
     asyncio.create_task(expired_shares_reaper())
 
 
@@ -3015,6 +3905,8 @@ async def on_startup() -> None:
 async def on_shutdown() -> None:
     if hasattr(app.state, "discovery"):
         app.state.discovery.stop()
+    if hasattr(app.state, "watch_folder"):
+        app.state.watch_folder.stop()
 
 
 def main() -> None:
