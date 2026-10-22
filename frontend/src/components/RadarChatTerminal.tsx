@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { PeerDevice, ChatMessage, AuthStatus } from '../types';
+import { OneToOneChatModal } from './OneToOneChatModal';
 
 interface RadarChatProps {
   auth: AuthStatus | null;
@@ -41,6 +42,7 @@ export const RadarChatTerminal: React.FC<RadarChatProps> = ({ auth }) => {
   const [chatChannel, setChatChannel] = useState('general');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
+  const [directChatTarget, setDirectChatTarget] = useState<{ id: string; name: string; username?: string } | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const fetchPeers = async () => {
@@ -296,11 +298,19 @@ export const RadarChatTerminal: React.FC<RadarChatProps> = ({ auth }) => {
                     </div>
                   </div>
 
-                  {/* Actions: Directional Clipboard Push & SAS Pairing */}
-                  <div className="flex items-center gap-2 pt-2 border-t border-surface-200 dark:border-surface-800/80">
+                  {/* Actions: Directional Clipboard Push & SAS Pairing & 1-to-1 Chat */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-surface-200 dark:border-surface-800/80">
+                    <button
+                      onClick={() => setDirectChatTarget({ id: peer.device_id, name: peer.name })}
+                      className="flex-1 min-w-[90px] py-1.5 rounded-lg border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 text-xs font-medium flex items-center justify-center gap-1 transition-colors"
+                      title="Open 1-to-1 direct chat with this peer"
+                    >
+                      <MessageSquare size={12} /> Direct Chat
+                    </button>
+
                     <button
                       onClick={() => setPushTargetDevice(peer)}
-                      className="flex-1 py-1.5 rounded-lg border border-surface-300 dark:border-surface-700 hover:bg-surface-200 dark:hover:bg-surface-800 text-xs font-medium flex items-center justify-center gap-1 transition-colors"
+                      className="flex-1 min-w-[90px] py-1.5 rounded-lg border border-surface-300 dark:border-surface-700 hover:bg-surface-200 dark:hover:bg-surface-800 text-xs font-medium flex items-center justify-center gap-1 transition-colors"
                       title="Directly push text to this peer's clipboard"
                     >
                       <Clipboard size={12} /> Push Text
@@ -309,7 +319,7 @@ export const RadarChatTerminal: React.FC<RadarChatProps> = ({ auth }) => {
                     {!peer.trusted && (
                       <button
                         onClick={() => handleStartPairing(peer)}
-                        className="flex-1 py-1.5 rounded-lg bg-surface-900 text-white dark:bg-surface-100 dark:text-surface-900 hover:opacity-90 text-xs font-medium flex items-center justify-center gap-1 transition-opacity"
+                        className="flex-1 min-w-[90px] py-1.5 rounded-lg bg-surface-900 text-white dark:bg-surface-100 dark:text-surface-900 hover:opacity-90 text-xs font-medium flex items-center justify-center gap-1 transition-opacity"
                         title="Establish cryptographic SAS pairing handshake"
                       >
                         <Key size={12} /> Pair Device
@@ -426,6 +436,16 @@ export const RadarChatTerminal: React.FC<RadarChatProps> = ({ auth }) => {
             </div>
           </form>
         </div>
+      )}
+
+      {/* Modal: One-to-One Direct Chat */}
+      {directChatTarget && (
+        <OneToOneChatModal
+          target={directChatTarget}
+          myId={auth?.user?.id || 'gst_local'}
+          myName={auth?.user?.display_name || auth?.user?.username || 'Local Peer'}
+          onClose={() => setDirectChatTarget(null)}
+        />
       )}
 
       {/* Modal: SAS Pairing Handshake */}

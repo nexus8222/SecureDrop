@@ -102,7 +102,37 @@ export const SendTerminal: React.FC<SendTerminalProps> = ({ auth }) => {
         }
       } catch {}
     }
+
+    // Restore draft form inputs
+    const draftStr = localStorage.getItem(`sd_draft_u_${userScope}`);
+    if (draftStr) {
+      try {
+        const d = JSON.parse(draftStr);
+        if (d.title) setTitle(d.title);
+        if (d.password) setPassword(d.password);
+        if (d.shareTargetMode) setShareTargetMode(d.shareTargetMode);
+        if (d.selectedGroupId) setSelectedGroupId(d.selectedGroupId);
+        if (d.selectedUsernames) setSelectedUsernames(d.selectedUsernames);
+        if (d.expiresSeconds) setExpiresSeconds(d.expiresSeconds);
+      } catch {}
+    }
   }, [auth]);
+
+  // Persist form draft inputs on change
+  useEffect(() => {
+    const userScope = auth?.user?.id || 'guest';
+    if (!uploading && !activeShareData) {
+      const d = {
+        title,
+        password,
+        shareTargetMode,
+        selectedGroupId,
+        selectedUsernames,
+        expiresSeconds,
+      };
+      localStorage.setItem(`sd_draft_u_${userScope}`, JSON.stringify(d));
+    }
+  }, [title, password, shareTargetMode, selectedGroupId, selectedUsernames, expiresSeconds, uploading, activeShareData, auth]);
 
   // Handle file selection
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -251,20 +281,26 @@ export const SendTerminal: React.FC<SendTerminalProps> = ({ auth }) => {
           const chunkArrayBuffer = await chunkBlob.arrayBuffer();
 
           let uploadBody: BodyInit = chunkArrayBuffer;
-          let chunkMetaHeader: any = {
-            chunk_index: cIdx,
-            original_size: chunkArrayBuffer.byteLength,
-          };
+          let chunkMetaHeader: any = null;
+          let putUrl = `/api/shares/${token}/files/${fileId}/chunks/${cIdx}`;
 
           if (cryptoKey) {
             const enc = await encryptChunk(cryptoKey, chunkArrayBuffer);
-            uploadBody = enc.ciphertext;
+            uploadBody = enc.payload;
             chunkMetaHeader = {
               chunk_index: cIdx,
               original_size: chunkArrayBuffer.byteLength,
               plaintext_sha256: enc.plainSha,
               ciphertext_sha256: enc.cipherSha,
               nonce_b64: enc.nonceB64,
+            };
+          } else {
+            putUrl = `/api/shares/${token}/files/${fileId}/chunks/${cIdx}/plain`;
+            const plainSha = await sha256Hex(chunkArrayBuffer);
+            chunkMetaHeader = {
+              chunk_index: cIdx,
+              original_size: chunkArrayBuffer.byteLength,
+              plaintext_sha256: plainSha,
             };
           }
 
@@ -273,20 +309,29 @@ export const SendTerminal: React.FC<SendTerminalProps> = ({ auth }) => {
           let chunkSuccess = false;
           while (!chunkSuccess && retries < 5) {
             try {
-              const putRes = await fetch(`/api/shares/${token}/files/${fileId}/chunks/${cIdx}`, {
+              const headers: Record<string, string> = {
+                'x-upload-token': uploadToken,
+                'Content-Type': 'application/octet-stream',
+              };
+              if (cryptoKey && chunkMetaHeader) {
+                headers['x-chunk-meta'] = btoa(JSON.stringify(chunkMetaHeader));
+              } else if (chunkMetaHeader?.plaintext_sha256) {
+                headers['x-plaintext-sha256'] = chunkMetaHeader.plaintext_sha256;
+              }
+
+              const putRes = await fetch(putUrl, {
                 method: 'PUT',
-                headers: {
-                  'x-upload-token': uploadToken,
-                  'x-chunk-meta': btoa(JSON.stringify(chunkMetaHeader)),
-                  'Content-Type': 'application/octet-stream',
-                },
+                headers,
                 body: uploadBody,
               });
-              if (!putRes.ok) throw new Error(`HTTP ${putRes.status}`);
+              if (!putRes.ok) {
+                const errText = await putRes.text();
+                throw new Error(`HTTP ${putRes.status}: ${errText}`);
+              }
               chunkSuccess = true;
-            } catch (err) {
+            } catch (err: any) {
               retries++;
-              await new Promise((r) => setTimeout(r, 1000 * Math.pow(1.5, retries)));
+              await new Promise((r) => setTimeout(r, 600 * Math.pow(1.5, retries)));
             }
           }
 
@@ -326,6 +371,7 @@ export const SendTerminal: React.FC<SendTerminalProps> = ({ auth }) => {
         completedAt: Date.now(),
       };
       localStorage.setItem(`sd_active_upload_${userScope}`, JSON.stringify(finalData));
+      localStorage.removeItem(`sd_draft_u_${userScope}`);
       setActiveShareData(finalData);
       setUploading(false);
     } catch (err: any) {
@@ -337,9 +383,13 @@ export const SendTerminal: React.FC<SendTerminalProps> = ({ auth }) => {
   const handleReset = () => {
     const userScope = auth?.user?.id || 'guest';
     localStorage.removeItem(`sd_active_upload_${userScope}`);
+    localStorage.removeItem(`sd_draft_u_${userScope}`);
     setActiveShareData(null);
     setFiles([]);
     setTitle('');
+    setPassword('');
+    setSelectedUsernames([]);
+    setSelectedGroupId('');
     setOverallProgress(0);
   };
 

@@ -11,6 +11,7 @@ import json
 import math
 import os
 import queue
+import random
 import re
 import secrets
 import shutil
@@ -126,25 +127,38 @@ class Database:
         self.lock = threading.RLock()
         self._local = threading.local()
         # Initialize WAL mode and busy timeout
-        with sqlite3.connect(self.path) as con:
+        with sqlite3.connect(self.path, timeout=30.0) as con:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=NORMAL")
-            con.execute("PRAGMA busy_timeout=15000")
+            con.execute("PRAGMA busy_timeout=30000")
         self.init()
 
     def connect(self) -> sqlite3.Connection:
         con = getattr(self._local, "conn", None)
         if con is None:
-            con = sqlite3.connect(self.path, check_same_thread=False, timeout=15.0)
+            con = sqlite3.connect(self.path, check_same_thread=False, timeout=30.0, isolation_level=None)
             con.row_factory = sqlite3.Row
+            con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=NORMAL")
-            con.execute("PRAGMA busy_timeout=15000")
+            con.execute("PRAGMA busy_timeout=30000")
             con.execute("PRAGMA foreign_keys=ON")
             con.execute("PRAGMA cache_size=-64000")
             con.execute("PRAGMA temp_store=MEMORY")
             con.execute("PRAGMA mmap_size=268435456")
             self._local.conn = con
         return con
+
+    def _retry_op(self, fn, max_retries: int = 6):
+        for attempt in range(max_retries):
+            try:
+                with self.lock:
+                    return fn()
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    sleep_time = 0.05 * (1.5 ** attempt) + random.uniform(0.01, 0.05)
+                    time.sleep(sleep_time)
+                    continue
+                raise
 
     def init(self) -> None:
         with self.lock:
@@ -405,6 +419,16 @@ class Database:
             except Exception:
                 pass
 
+            try:
+                con.execute("ALTER TABLE user_sessions ADD COLUMN last_activity INTEGER DEFAULT 0")
+            except Exception:
+                pass
+
+            try:
+                con.execute("ALTER TABLE user_sessions ADD COLUMN cred_fingerprint TEXT")
+            except Exception:
+                pass
+
             con.execute("CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_files_share_token ON files(share_token)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_shares_owner ON shares(owner_user_id)")
@@ -427,32 +451,35 @@ class Database:
                 self.set_setting("identity_fingerprint", hashlib.sha256(device_id.encode()).hexdigest()[:32].upper())
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        with self.lock:
+        def _get():
             con = self.connect()
             row = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
             return row["value"] if row else default
+        return self._retry_op(_get)
 
     def set_setting(self, key: str, value: str) -> None:
-        with self.lock:
+        def _set():
             con = self.connect()
             con.execute("INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (key, value))
-            con.commit()
+        self._retry_op(_set)
 
     def execute(self, sql: str, params: Tuple[Any, ...] = ()) -> None:
-        with self.lock:
+        def _exec():
             con = self.connect()
             con.execute(sql, params)
-            con.commit()
+        self._retry_op(_exec)
 
     def one(self, sql: str, params: Tuple[Any, ...] = ()) -> Optional[sqlite3.Row]:
-        with self.lock:
+        def _one():
             con = self.connect()
             return con.execute(sql, params).fetchone()
+        return self._retry_op(_one)
 
     def all(self, sql: str, params: Tuple[Any, ...] = ()) -> List[sqlite3.Row]:
-        with self.lock:
+        def _all():
             con = self.connect()
             return con.execute(sql, params).fetchall()
+        return self._retry_op(_all)
 
 
 db = Database(DB_PATH)
@@ -1076,9 +1103,9 @@ if (STATIC_DIR / "dist" / "assets").exists():
 
 
 ADMIN_COOKIE = "securedrop_admin"
-ADMIN_SESSION_TTL = 7 * 24 * 3600
+ADMIN_SESSION_TTL = 3600  # 1 hour default session
 USER_COOKIE = "securedrop_session"
-USER_SESSION_TTL = 7 * 24 * 3600
+USER_SESSION_TTL = 3600   # 1 hour default inactivity session
 
 
 def _token_hash(token: str) -> str:
@@ -1087,6 +1114,13 @@ def _token_hash(token: str) -> str:
 
 def _user_token_hash(token: str) -> str:
     return hashlib.sha256(("user-session:" + token).encode()).hexdigest()
+
+
+def _compute_cred_fingerprint(password_hash: str, ip: str, user_agent: str) -> str:
+    """Cryptographically binds session to user credentials, IP subnet, and client agent."""
+    subnet = ".".join(ip.split(".")[:3]) if "." in ip else ip
+    raw = f"{password_hash}:{subnet}:{user_agent[:80]}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
 def hash_user_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
@@ -1187,12 +1221,16 @@ def create_user_session(user_id: str, request: Request, response: Response) -> s
     token = "usr_tok_" + b64url(secrets.token_bytes(32))
     client_ip = request.client.host if request.client else ""
     user_agent = request.headers.get("user-agent", "")[:250]
+    user_row = db.one("SELECT password_hash FROM users WHERE id=?", (user_id,))
+    pw_hash = user_row["password_hash"] if user_row else ""
+    cred_fp = _compute_cred_fingerprint(pw_hash, client_ip, user_agent)
+    t_now = now()
     db.execute(
         """
-        INSERT INTO user_sessions(token_hash, user_id, created_at, expires_at, ip, user_agent)
-        VALUES(?,?,?,?,?,?)
+        INSERT INTO user_sessions(token_hash, user_id, created_at, expires_at, last_activity, ip, user_agent, cred_fingerprint)
+        VALUES(?,?,?,?,?,?,?,?)
         """,
-        (_user_token_hash(token), user_id, now(), now() + USER_SESSION_TTL, client_ip, user_agent),
+        (_user_token_hash(token), user_id, t_now, t_now + USER_SESSION_TTL, t_now, client_ip, user_agent, cred_fp),
     )
     is_https = request.url.scheme == "https"
     response.set_cookie(
@@ -1204,7 +1242,7 @@ def create_user_session(user_id: str, request: Request, response: Response) -> s
         samesite="lax",
         path="/",
     )
-    db.execute("UPDATE users SET last_login=? WHERE id=?", (now(), user_id))
+    db.execute("UPDATE users SET last_login=? WHERE id=?", (t_now, user_id))
     return token
 
 
@@ -1212,19 +1250,39 @@ def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
     ensure_admin_user()
     token = request.cookies.get(USER_COOKIE)
     if token:
+        token_hash = _user_token_hash(token)
         row = db.one(
             """
-            SELECT s.expires_at, u.id, u.username, u.display_name, u.role, u.status
+            SELECT s.expires_at, s.last_activity, s.cred_fingerprint, s.ip,
+                   u.id, u.username, u.display_name, u.role, u.status, u.password_hash
             FROM user_sessions s
             JOIN users u ON s.user_id = u.id
             WHERE s.token_hash = ?
             """,
-            (_user_token_hash(token),),
+            (token_hash,),
         )
         if row:
-            if int(row["expires_at"]) < now():
-                db.execute("DELETE FROM user_sessions WHERE token_hash=?", (_user_token_hash(token),))
-            elif row["status"] == "active":
+            t_now = now()
+            last_act = int(row["last_activity"] or row["expires_at"] - USER_SESSION_TTL)
+            # Inactivity timeout: 1 hour (3600s) default inactivity expiration
+            if t_now - last_act > 3600 or int(row["expires_at"]) < t_now:
+                db.execute("DELETE FROM user_sessions WHERE token_hash=?", (token_hash,))
+                return None
+
+            # Verify credential binding to prevent session replay across different client/subnet or password change
+            client_ip = request.client.host if request.client else ""
+            user_agent = request.headers.get("user-agent", "")[:250]
+            expected_fp = _compute_cred_fingerprint(row["password_hash"], client_ip, user_agent)
+            if row["cred_fingerprint"] and row["cred_fingerprint"] != expected_fp:
+                db.execute("DELETE FROM user_sessions WHERE token_hash=?", (token_hash,))
+                return None
+
+            if row["status"] == "active":
+                # Sliding activity update: keep active user logged in
+                db.execute(
+                    "UPDATE user_sessions SET last_activity=?, expires_at=? WHERE token_hash=?",
+                    (t_now, t_now + USER_SESSION_TTL, token_hash),
+                )
                 return {
                     "id": row["id"],
                     "username": row["username"],
@@ -1232,6 +1290,9 @@ def get_current_user(request: Request) -> Optional[Dict[str, Any]]:
                     "role": row["role"],
                     "status": row["status"],
                 }
+            else:
+                db.execute("DELETE FROM user_sessions WHERE token_hash=?", (token_hash,))
+                return None
 
     # Check legacy admin cookie
     adm_token = request.cookies.get(ADMIN_COOKIE)
@@ -2730,6 +2791,23 @@ async def create_room(data: RoomCreate, request: Request) -> Dict[str, Any]:
     )
     await ws_manager.broadcast({"type": "room_created", "room_id": room_id, "name": data.name.strip()})
     return {"ok": True, "room_id": room_id, "name": data.name.strip()}
+
+
+@app.delete("/api/rooms/{room_id}")
+async def delete_room(room_id: str, request: Request) -> Dict[str, Any]:
+    user = get_current_user(request)
+    room = db.one("SELECT * FROM collab_rooms WHERE id=?", (room_id,))
+    if not room:
+        raise HTTPException(404, "Room not found")
+    is_admin = bool(user and user.get("role") == "admin") or is_admin_request(request)
+    guest_id = request.cookies.get("securedrop_guest_id")
+    is_host = bool((user and user.get("id") == room["host_user_id"]) or (guest_id and guest_id == room["host_user_id"]))
+    if not (is_admin or is_host):
+        raise HTTPException(403, "Only the host or an administrator can delete this room")
+    db.execute("DELETE FROM room_items WHERE room_id=?", (room_id,))
+    db.execute("DELETE FROM collab_rooms WHERE id=?", (room_id,))
+    await ws_manager.broadcast({"type": "room_deleted", "room_id": room_id})
+    return {"ok": True, "deleted": room_id}
 
 
 @app.get("/api/rooms/{room_id}")

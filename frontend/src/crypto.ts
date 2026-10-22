@@ -56,25 +56,40 @@ export async function importAesKey(rawBase64: string): Promise<CryptoKey> {
 export async function encryptChunk(
   key: CryptoKey,
   plainBytes: ArrayBuffer
-): Promise<{ ciphertext: ArrayBuffer; nonceB64: string; plainSha: string; cipherSha: string }> {
+): Promise<{ payload: ArrayBuffer; nonceB64: string; plainSha: string; cipherSha: string }> {
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonce.buffer as ArrayBuffer },
     key,
     plainBytes
   );
+  const cipherBytes = new Uint8Array(ciphertext);
+  const payload = new Uint8Array(12 + cipherBytes.length);
+  payload.set(nonce, 0);
+  payload.set(cipherBytes, 12);
   const plainSha = await sha256Hex(plainBytes);
-  const cipherSha = await sha256Hex(ciphertext);
-  const nonceB64 = b64urlEncode(nonce.buffer);
-  return { ciphertext, nonceB64, plainSha, cipherSha };
+  const cipherSha = await sha256Hex(payload.buffer as ArrayBuffer);
+  const nonceB64 = b64urlEncode(nonce.buffer as ArrayBuffer);
+  return { payload: payload.buffer as ArrayBuffer, nonceB64, plainSha, cipherSha };
 }
 
 export async function decryptChunk(
   key: CryptoKey,
-  cipherBytes: ArrayBuffer,
-  nonceB64: string
+  dataWithNonceOrCipher: ArrayBuffer,
+  nonceB64?: string
 ): Promise<ArrayBuffer> {
-  const nonce = b64urlDecode(nonceB64);
+  let nonce: Uint8Array;
+  let cipherBytes: ArrayBuffer;
+  if (dataWithNonceOrCipher.byteLength > 12 && (!nonceB64 || nonceB64 === 'auto')) {
+    nonce = new Uint8Array(dataWithNonceOrCipher.slice(0, 12));
+    cipherBytes = dataWithNonceOrCipher.slice(12);
+  } else if (nonceB64) {
+    nonce = b64urlDecode(nonceB64);
+    cipherBytes = dataWithNonceOrCipher;
+  } else {
+    throw new Error('Missing nonce for decryption');
+  }
+
   return await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: nonce.buffer as ArrayBuffer },
     key,

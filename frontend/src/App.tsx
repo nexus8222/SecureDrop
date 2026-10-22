@@ -13,9 +13,48 @@ import { MediaGalleryTerminal } from './components/MediaGalleryTerminal';
 import { AdminCockpit } from './components/AdminCockpit';
 import { Lock, LogIn, UserPlus } from 'lucide-react';
 
+const validTabs = ['send', 'receive', 'inbox', 'shares', 'rooms', 'radar', 'clipboard', 'gallery', 'admin'];
+
 export const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('send');
+
+  const getInitialTab = (): string => {
+    const rawPath = window.location.pathname.replace(/^\/+/, '').split('/')[0];
+    if (rawPath && validTabs.includes(rawPath)) {
+      return rawPath;
+    }
+    const saved = localStorage.getItem('sd_active_tab');
+    if (saved && validTabs.includes(saved)) {
+      return saved;
+    }
+    return 'send';
+  };
+
+  const [activeTab, setActiveTabState] = useState<string>(getInitialTab);
+
+  const setActiveTab = (tab: string) => {
+    setActiveTabState(tab);
+    localStorage.setItem('sd_active_tab', tab);
+    if (window.location.pathname !== `/${tab}`) {
+      window.history.pushState({ tab }, '', `/${tab}`);
+    }
+  };
+
+  useEffect(() => {
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+      window.history.replaceState({ tab: activeTab }, '', `/${activeTab}`);
+    }
+
+    const onPopState = () => {
+      const rawPath = window.location.pathname.replace(/^\/+/, '').split('/')[0];
+      if (rawPath && validTabs.includes(rawPath)) {
+        setActiveTabState(rawPath);
+        localStorage.setItem('sd_active_tab', rawPath);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [activeTab]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     return localStorage.getItem('sd_sidebar_collapsed') === 'true';
   });

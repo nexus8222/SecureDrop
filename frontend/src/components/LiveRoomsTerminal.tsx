@@ -10,6 +10,7 @@ import {
   User,
   FolderOpen,
   CheckCircle,
+  Trash2,
 } from 'lucide-react';
 import { api } from '../api';
 import { CollabRoom, RoomItem, AuthStatus } from '../types';
@@ -58,6 +59,9 @@ export const LiveRoomsTerminal: React.FC<LiveRoomsProps> = ({ auth }) => {
           const data = JSON.parse(event.data);
           if (data.type === 'room_created') {
             fetchRooms();
+          } else if (data.type === 'room_deleted') {
+            fetchRooms();
+            setActiveRoom((prev) => (prev && prev.id === data.room_id ? null : prev));
           } else if (data.type === 'room_item_added' && activeRoom && data.room_id === activeRoom.id) {
             // Append newly dropped item immediately
             setActiveRoom((prev) =>
@@ -105,6 +109,28 @@ export const LiveRoomsTerminal: React.FC<LiveRoomsProps> = ({ auth }) => {
     } catch (err: any) {
       alert(`Create room failed: ${err.message}`);
     }
+  };
+
+  const handleDeleteRoom = async (e: React.MouseEvent, roomId: string) => {
+    e.stopPropagation();
+    if (!confirm('Are you sure you want to delete this room? All room payloads will be removed.')) return;
+    try {
+      await api.deleteRoom(roomId);
+      if (activeRoom?.id === roomId) {
+        setActiveRoom(null);
+      }
+      fetchRooms();
+    } catch (err: any) {
+      alert(`Could not delete room: ${err.message}`);
+    }
+  };
+
+  const canDeleteRoom = (room: CollabRoom) => {
+    return (
+      auth?.is_admin ||
+      auth?.user?.role === 'admin' ||
+      (auth?.user?.id && room.host_user_id === auth?.user?.id)
+    );
   };
 
   const handleDropIntoRoom = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -202,6 +228,15 @@ export const LiveRoomsTerminal: React.FC<LiveRoomsProps> = ({ auth }) => {
                   <Upload size={13} /> Drop File to Room
                   <input type="file" onChange={handleDropIntoRoom} className="hidden" />
                 </label>
+                {canDeleteRoom(activeRoom) && (
+                  <button
+                    onClick={(e) => handleDeleteRoom(e, activeRoom.id)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs font-medium transition-colors"
+                    title="Delete this room"
+                  >
+                    <Trash2 size={13} /> Delete Room
+                  </button>
+                )}
                 <button
                   onClick={() => setActiveRoom(null)}
                   className="px-3 py-1.5 rounded-lg border border-surface-300 dark:border-surface-700 text-xs font-medium hover:bg-surface-100 dark:hover:bg-surface-800"
@@ -262,11 +297,22 @@ export const LiveRoomsTerminal: React.FC<LiveRoomsProps> = ({ auth }) => {
                   <h3 className="font-bold text-sm text-surface-900 dark:text-surface-100 truncate">
                     {room.name}
                   </h3>
-                  {room.has_pin && (
-                    <span className="p-1 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20" title="PIN Protected">
-                      <Lock size={12} />
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    {room.has_pin && (
+                      <span className="p-1 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20" title="PIN Protected">
+                        <Lock size={12} />
+                      </span>
+                    )}
+                    {canDeleteRoom(room) && (
+                      <button
+                        onClick={(e) => handleDeleteRoom(e, room.id)}
+                        className="p-1 rounded text-surface-400 hover:text-red-500 hover:bg-red-500/10 transition-colors"
+                        title="Delete Room"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between text-xs text-surface-500 font-mono">

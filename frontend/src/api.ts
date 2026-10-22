@@ -142,6 +142,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ share_token: shareToken, sender_name: senderName || null }),
     }),
+  deleteRoom: (roomId: string) =>
+    fetchJson<{ ok: boolean; deleted: string }>(`/api/rooms/${roomId}`, { method: 'DELETE' }),
 
   // Ephemeral Chat
   getChat: (channel: string) => fetchJson<{ messages: ChatMessage[] }>(`/api/chat/${channel}`),
